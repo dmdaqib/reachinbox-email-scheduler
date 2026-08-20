@@ -1,0 +1,77 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum EmailStatus {
+  SCHEDULED
+  PROCESSING
+  SENT
+  FAILED
+}
+
+model User {
+  id        String   @id @default(cuid())
+  googleId  String   @unique
+  email     String   @unique
+  name      String
+  avatarUrl String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  senders Sender[]
+  emails  Email[]
+}
+
+model Sender {
+  id           String   @id @default(cuid())
+  userId       String
+  email        String
+  displayName  String
+  smtpHost     String
+  smtpPort     Int
+  smtpUser     String
+  smtpPass     String
+  isDefault    Boolean  @default(false)
+  hourlyLimit  Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emails  Email[]
+
+  @@index([userId, isDefault])
+}
+
+model Email {
+  id                String      @id @default(cuid())
+  userId            String
+  senderId          String
+  toEmail           String
+  subject           String
+  body              String      @db.Text
+  status            EmailStatus @default(SCHEDULED)
+  scheduledAt       DateTime
+  sentAt            DateTime?
+  failedAt          DateTime?
+  delayMs           Int
+  hourlyLimit       Int
+  attemptCount      Int         @default(0)
+  lastError         String?     @db.Text
+  bullmqJobId       String      @unique
+  etherealMessageId String?
+  previewUrl        String?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sender Sender @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, scheduledAt])
+  @@index([senderId, scheduledAt])
+  @@index([senderId, status])
+}
