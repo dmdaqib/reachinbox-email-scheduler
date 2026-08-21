@@ -46,22 +46,27 @@ export async function sendMailWithEthereal({
   text: string;
 }) {
   const transport = await getTransport();
-  const result = (await transport.sendMail({
-    from,
-    to,
-    subject,
-    text,
-  })) as {
-    messageId?: string;
-    response?: string;
-    accepted?: string[];
-  };
+  try {
+    const result = (await transport.sendMail({
+      from,
+      to,
+      subject,
+      text,
+    })) as {
+      messageId?: string;
+      response?: string;
+      accepted?: string[];
+    };
 
-  const previewUrl = nodemailer.getTestMessageUrl(result as any);
+    const previewUrl = nodemailer.getTestMessageUrl(result as any);
 
-  return {
-    messageId: result.messageId ?? undefined,
-    previewUrl: typeof previewUrl === 'string' ? previewUrl : undefined,
-  };
+    return {
+      messageId: result.messageId ?? undefined,
+      previewUrl: typeof previewUrl === 'string' ? previewUrl : undefined,
+    };
+  } catch (error) {
+    cachedTransport = null;
+    throw error;
+  }
 }
 

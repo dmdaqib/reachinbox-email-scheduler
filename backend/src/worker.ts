@@ -18,6 +18,26 @@ const worker = new Worker(
     if (email.status === 'SENT' || email.etherealMessageId) return;
     if (email.status === 'FAILED') return;
 
+    // Safety guard: Ensure job is never dispatched before its persisted scheduledAt timestamp
+    const remainingDelay = new Date(email.scheduledAt).getTime() - Date.now();
+    if (remainingDelay > 100) {
+      await prisma.email.update({
+        where: { id: emailId },
+        data: { status: 'SCHEDULED' },
+      });
+      await queue.add(
+        'email-send',
+        { emailId },
+        {
+          jobId: `email-${emailId}-early-${Date.now()}`,
+          delay: remainingDelay,
+          removeOnComplete: true,
+          removeOnFail: true,
+        },
+      );
+      return;
+    }
+
     const claimed = await prisma.email.updateMany({
       where: {
         id: emailId,
@@ -50,9 +70,16 @@ const worker = new Worker(
         },
       });
 
-      const queuedJob = await queue.getJob(`email:${emailId}`);
-      if (queuedJob) await queuedJob.remove();
-      await queue.add('email-send', { emailId }, { jobId: `email:${emailId}`, delay: minDelayWait });
+      await queue.add(
+        'email-send',
+        { emailId },
+        {
+          jobId: `email-${emailId}-delay-${delayedAt.getTime()}`,
+          delay: minDelayWait,
+          removeOnComplete: true,
+          removeOnFail: true,
+        },
+      );
       return;
     }
 
@@ -68,9 +95,17 @@ const worker = new Worker(
           lastError: 'Hourly capacity exceeded; rescheduled to next UTC hour',
         },
       });
-      const queuedJob = await queue.getJob(`email:${emailId}`);
-      if (queuedJob) await queuedJob.remove();
-      await queue.add('email-send', { emailId }, { jobId: `email:${emailId}`, delay: Math.max(0, nextWindow.getTime() - Date.now()) });
+
+      await queue.add(
+        'email-send',
+        { emailId },
+        {
+          jobId: `email-${emailId}-hour-${nextWindow.getTime()}`,
+          delay: Math.max(0, nextWindow.getTime() - Date.now()),
+          removeOnComplete: true,
+          removeOnFail: true,
+        },
+      );
       return;
     }
 
@@ -94,21 +129,51 @@ const worker = new Worker(
         },
       });
     } catch (error) {
-      await prisma.email.update({
-        where: { id: emailId },
-        data: {
-          status: 'FAILED',
-          failedAt: new Date(),
-          attemptCount: { increment: 1 },
-          lastError: error instanceof Error ? error.message : 'Unknown error',
-        },
-      });
+      const nextAttempt = email.attemptCount + 1;
+      const maxAttempts = 3;
+
+      if (nextAttempt >= maxAttempts) {
+        await prisma.email.update({
+          where: { id: emailId },
+          data: {
+            status: 'FAILED',
+            failedAt: new Date(),
+            attemptCount: nextAttempt,
+            lastError: error instanceof Error ? error.message : 'Unknown error',
+          },
+        });
+      } else {
+        const retryDelayMs = Math.min(1000 * Math.pow(2, nextAttempt), 30000);
+        const retryScheduledAt = new Date(Date.now() + retryDelayMs);
+        await prisma.email.update({
+          where: { id: emailId },
+          data: {
+            status: 'SCHEDULED',
+            scheduledAt: retryScheduledAt,
+            attemptCount: nextAttempt,
+            lastError: `Retry ${nextAttempt}/${maxAttempts}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        });
+        await queue.add(
+          'email-send',
+          { emailId },
+          {
+            jobId: `email-${emailId}-retry-${nextAttempt}-${Date.now()}`,
+            delay: retryDelayMs,
+            removeOnComplete: true,
+            removeOnFail: true,
+          },
+        );
+      }
       throw error;
     }
   },
   {
     connection: redis,
     concurrency: env.WORKER_CONCURRENCY,
+    lockDuration: 30000,
+    stalledInterval: 30000,
+    maxStalledCount: 3,
   },
 );
 

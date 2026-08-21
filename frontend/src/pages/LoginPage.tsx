@@ -2,49 +2,49 @@ export function LoginPage() {
   const backendUrl = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
   return (
-    <div className="min-h-screen bg-[#f5f7f3] flex items-center justify-center p-6 text-slate-800">
-      <div className="w-full max-w-4xl bg-white rounded-[32px] shadow-[0_20px_60px_rgba(15,23,42,0.06)] overflow-hidden border border-[#edf1ee] grid md:grid-cols-2">
+    <div className="min-h-screen bg-[#f5f7f3] flex items-center justify-center p-6 text-slate-800 font-sans">
+      <div className="w-full max-w-4xl bg-white rounded-3xl shadow-xl overflow-hidden border border-slate-200/80 grid md:grid-cols-2">
         {/* Left Banner */}
-        <div className="bg-[#f4f8f2] p-10 flex flex-col justify-between min-h-[480px]">
+        <div className="bg-gradient-to-b from-[#f4f8f2] to-[#eaf2e8] p-8 md:p-10 flex flex-col justify-between min-h-[460px]">
           <div>
-            <div className="flex items-center gap-2.5">
-              <div className="h-8 w-8 rounded-lg bg-brand-600 flex items-center justify-center text-white font-black text-sm">
+            <div className="flex items-center gap-3">
+              <div className="h-9 w-9 rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center text-white font-black text-base shadow-md shadow-brand-600/20">
                 R
               </div>
-              <span className="text-xs font-bold tracking-[0.24em] text-[#556955] uppercase">
+              <span className="text-xs font-black tracking-[0.24em] text-brand-900 uppercase">
                 ReachInbox
               </span>
             </div>
-            <h1 className="mt-10 text-4xl font-bold text-slate-800 leading-tight">
+            <h1 className="mt-10 text-3xl md:text-4xl font-extrabold text-slate-900 leading-tight">
               Email outreach, <br />
-              <span className="text-brand-600">perfectly timed.</span>
+              <span className="text-brand-700">perfectly timed.</span>
             </h1>
-            <p className="mt-4 text-sm text-slate-600 leading-relaxed">
-              Schedule thousands of email dispatches with Redis-backed rate limiting, delay queues, and zero duplicate sends.
+            <p className="mt-4 text-xs md:text-sm text-slate-600 leading-relaxed font-normal">
+              Schedule thousands of email dispatches with Redis-backed rate limiting, BullMQ delay queues, and zero duplicate sends.
             </p>
           </div>
 
-          <div className="rounded-2xl bg-white border border-[#e2ebe2] p-5 shadow-xs">
-            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Features</div>
-            <div className="mt-3 flex items-center justify-between text-xs text-slate-600 font-medium">
-              <span>⚡ BullMQ Delayed Queue</span>
+          <div className="rounded-2xl bg-white/90 backdrop-blur-xs border border-brand-200/60 p-4 shadow-xs">
+            <div className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">Platform Features</div>
+            <div className="mt-2.5 flex items-center justify-between text-xs text-slate-700 font-semibold">
+              <span>⚡ BullMQ Delay Queue</span>
               <span>🔒 Multi-Worker Safe</span>
             </div>
           </div>
         </div>
 
         {/* Right Auth Action */}
-        <div className="p-10 md:p-12 flex flex-col justify-center">
-          <div className="text-xs font-bold uppercase tracking-[0.2em] text-slate-400">Authentication</div>
-          <h2 className="mt-4 text-2xl font-bold text-slate-800">Sign in to your account</h2>
-          <p className="mt-2 text-xs text-slate-500">
-            Use your Google account to access your ReachInbox dashboard.
+        <div className="p-8 md:p-12 flex flex-col justify-center bg-white">
+          <div className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-slate-400">Authentication</div>
+          <h2 className="mt-3 text-2xl font-black text-slate-900 tracking-tight">Sign in to your account</h2>
+          <p className="mt-1.5 text-xs text-slate-500">
+            Use your Google account to access your ReachInbox email dashboard.
           </p>
 
           <div className="mt-8 space-y-4">
             <button
               onClick={() => (window.location.href = `${backendUrl}/api/auth/google`)}
-              className="w-full flex items-center justify-center gap-3 bg-slate-900 hover:bg-slate-800 text-white rounded-xl px-5 py-3.5 font-semibold text-sm transition-all shadow-sm hover:shadow-md cursor-pointer"
+              className="w-full flex items-center justify-center gap-3 bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white rounded-2xl px-5 py-3.5 font-bold text-xs transition-all shadow-md cursor-pointer"
             >
               <svg className="w-5 h-5" viewBox="0 0 24 24">
                 <path
@@ -64,31 +64,31 @@ export function LoginPage() {
                   d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2.2-6.4-5.2L1.9 16C3.7 19.7 7.5 23 12 23z"
                 />
               </svg>
-              Sign in with Google OAuth
+              <span>Sign in with Google OAuth</span>
             </button>
 
             <div className="relative my-6">
               <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-slate-200" />
+                <div className="w-full border-t border-slate-200/80" />
               </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-white px-3 text-slate-400 font-medium tracking-wider">
+              <div className="relative flex justify-center text-[10px] uppercase">
+                <span className="bg-white px-3 text-slate-400 font-bold tracking-widest">
                   Figma Visual Match
                 </span>
               </div>
             </div>
 
-            <div className="space-y-3 opacity-60 pointer-events-none">
+            <div className="space-y-3 opacity-50 pointer-events-none">
               <input
                 disabled
-                placeholder="Email address (Disabled — Google OAuth required)"
-                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500"
+                placeholder="Email address (Google OAuth required)"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-500"
               />
               <input
                 disabled
                 type="password"
-                placeholder="Password (Disabled — Google OAuth required)"
-                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500"
+                placeholder="Password (Google OAuth required)"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-500"
               />
             </div>
           </div>

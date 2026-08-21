@@ -7,6 +7,14 @@ if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
   console.warn('Google OAuth credentials are not configured. Authentication routes will fail until .env is populated.');
 }
 
+if (env.GOOGLE_CLIENT_ID) {
+  const id = env.GOOGLE_CLIENT_ID;
+  const masked = id.length > 12 ? `${id.slice(0, 6)}...${id.slice(-10)}` : id;
+  console.log(`[Google OAuth Diagnostic] GOOGLE_CLIENT_ID is loaded: ${masked}`);
+} else {
+  console.warn('[Google OAuth Diagnostic] GOOGLE_CLIENT_ID is NOT loaded (using fallback dummy ID).');
+}
+
 passport.serializeUser((user: Express.User, done) => {
   done(null, user.id);
 });

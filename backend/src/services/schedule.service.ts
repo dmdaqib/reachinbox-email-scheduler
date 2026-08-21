@@ -61,7 +61,7 @@ export async function scheduleEmailsForUser(userId: string, input: ScheduleReque
   const preparedRows = uniqueRecipients.map((email, index) => {
     const scheduledAt = plannedWindows[index]?.scheduledAt ?? new Date(startAt.getTime() + index * effectiveDelayMs);
     const emailId = randomUUID();
-    const bullmqJobId = `email:${emailId}`;
+    const bullmqJobId = `email-${emailId}`;
 
     return {
       id: emailId,
@@ -96,7 +96,7 @@ export async function scheduleEmailsForUser(userId: string, input: ScheduleReque
         'email-send',
         { emailId: row.id },
         {
-          jobId: `email:${row.id}`,
+          jobId: `email-${row.id}`,
           delay: Math.max(0, new Date(row.scheduledAt).getTime() - Date.now()),
           removeOnComplete: true,
           removeOnFail: true,
@@ -142,3 +142,40 @@ export function createSenderForUser(userId: string, data: Partial<Sender> & { em
     },
   });
 }
+
+export async function cancelScheduledEmail(userId: string, emailId: string) {
+  const email = await prisma.email.findFirst({
+    where: { id: emailId, userId },
+  });
+
+  if (!email) {
+    throw new Error('Email not found');
+  }
+
+  if (email.status !== EmailStatus.SCHEDULED) {
+    throw new Error(`Cannot cancel email with status '${email.status}'`);
+  }
+
+  const updated = await prisma.email.updateMany({
+    where: { id: emailId, userId, status: EmailStatus.SCHEDULED },
+    data: {
+      status: EmailStatus.FAILED,
+      failedAt: new Date(),
+      lastError: 'Cancelled by user',
+    },
+  });
+
+  if (updated.count > 0) {
+    const jobId = `email-${emailId}`;
+    const existingJob = await queue.getJob(jobId);
+    if (existingJob) {
+      const isActive = await existingJob.isActive().catch(() => false);
+      if (!isActive) {
+        await existingJob.remove().catch(() => {});
+      }
+    }
+  }
+
+  return { success: true, emailId };
+}
+

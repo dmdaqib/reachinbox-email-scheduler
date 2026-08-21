@@ -1,4 +1,7 @@
+import RedisModule from 'ioredis';
 import { env } from '../config/env.js';
+
+const Redis = (RedisModule as any).default || RedisModule;
 
 class MemoryRedis {
   private store = new Map<string, string>();
@@ -55,11 +58,12 @@ class MemoryRedis {
   }
 }
 
-const useMemoryRedis = env.NODE_ENV === 'test' || process.env.VITEST === 'true' || !env.REDIS_URL || env.REDIS_URL === 'redis://localhost:6379';
+const useMemoryRedis = env.NODE_ENV === 'test' || process.env.VITEST === 'true';
 
 export const redis: any = useMemoryRedis
   ? new MemoryRedis()
-  : (() => {
-      const Redis = require('ioredis');
-      return new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
-    })();
+  : new Redis(env.REDIS_URL || 'redis://localhost:6379', {
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+    });
+

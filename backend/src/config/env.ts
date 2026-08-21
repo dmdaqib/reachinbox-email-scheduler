@@ -1,7 +1,18 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { config } from 'dotenv';
 import { z } from 'zod';
 
-config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+config({
+  path: [
+    path.resolve(process.cwd(), '.env'),
+    path.resolve(process.cwd(), '../.env'),
+    path.resolve(__dirname, '../../../.env'),
+  ],
+});
 
 const optionalString = z
   .string()

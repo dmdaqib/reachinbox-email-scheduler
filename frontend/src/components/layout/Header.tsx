@@ -8,32 +8,39 @@ type HeaderProps = {
 
 export const Header: React.FC<HeaderProps> = ({ user, onLogout }) => {
   return (
-    <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-[#e2e8e2] pb-5 mb-6">
+    <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-200/80 pb-5 mb-6">
       <div>
-        <div className="text-xs uppercase font-bold tracking-[0.2em] text-slate-400">ReachInbox Email Scheduler</div>
-        <h1 className="text-2xl font-bold text-slate-800 tracking-tight mt-0.5">Campaign Management</h1>
+        <div className="flex items-center gap-2">
+          <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+          <span className="text-[11px] uppercase font-bold tracking-[0.2em] text-slate-400">
+            ReachInbox Scheduler
+          </span>
+        </div>
+        <h1 className="text-2xl font-black text-slate-900 tracking-tight mt-1">
+          Campaign Management
+        </h1>
       </div>
 
-      <div className="flex items-center gap-4 self-end sm:self-auto">
+      <div className="flex items-center gap-3 self-end sm:self-auto">
         {user && (
-          <div className="flex items-center gap-3 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 shadow-xs">
+          <div className="flex items-center gap-3 rounded-2xl border border-slate-200/90 bg-white/80 backdrop-blur-xs px-3.5 py-2 shadow-xs hover:border-slate-300 transition-all">
             {user.avatarUrl ? (
-              <img src={user.avatarUrl} alt={user.name} className="h-8 w-8 rounded-full object-cover" />
+              <img src={user.avatarUrl} alt={user.name} className="h-8 w-8 rounded-xl object-cover border border-slate-100" />
             ) : (
-              <div className="h-8 w-8 rounded-full bg-brand-100 text-brand-700 font-bold flex items-center justify-center text-xs">
+              <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 text-white font-black flex items-center justify-center text-xs shadow-xs">
                 {user.name?.[0]?.toUpperCase() ?? 'U'}
               </div>
             )}
             <div className="text-left leading-none pr-1">
-              <div className="text-xs font-semibold text-slate-800">{user.name}</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">{user.email}</div>
+              <div className="text-xs font-bold text-slate-800">{user.name}</div>
+              <div className="text-[11px] text-slate-500 mt-1 font-mono">{user.email}</div>
             </div>
           </div>
         )}
 
         <button
           onClick={onLogout}
-          className="rounded-full border border-slate-200 bg-white hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 px-4 py-2 text-xs font-semibold text-slate-600 transition-all shadow-xs"
+          className="rounded-2xl border border-slate-200/90 bg-white hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200/80 px-4 py-2 text-xs font-bold text-slate-600 transition-all shadow-xs active:scale-95 cursor-pointer"
         >
           Logout
         </button>

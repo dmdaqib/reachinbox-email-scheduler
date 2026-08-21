@@ -6,7 +6,7 @@ import { env } from './config/env.js';
 import { errorHandler, notFoundHandler } from './middleware/error.js';
 import { requireAuth } from './middleware/auth.js';
 import { prisma } from './lib/prisma.js';
-import { scheduleEmailsForUser, getUserSenders, createSenderForUser } from './services/schedule.service.js';
+import { scheduleEmailsForUser, getUserSenders, createSenderForUser, cancelScheduledEmail } from './services/schedule.service.js';
 import { parseRecipientList } from './email/parseRecipients.js';
 import { queue } from './queue/email.queue.js';
 import multer from 'multer';
@@ -174,6 +174,18 @@ export function createApp() {
       orderBy: { sentAt: 'desc' },
     });
     res.json(emails);
+  });
+
+  app.post('/api/emails/:id/cancel', requireAuth, async (req, res, next) => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+
+      const result = await cancelScheduledEmail(userId, req.params.id);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.get('/api/emails/:id', requireAuth, async (req, res) => {
