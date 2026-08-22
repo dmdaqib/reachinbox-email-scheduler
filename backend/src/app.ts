@@ -17,24 +17,54 @@ const upload = multer({ storage });
 
 export function createApp() {
   const app = express();
+  const isProd = env.NODE_ENV === 'production' || process.env.NODE_ENV === 'production';
+
+  if (isProd) {
+    app.set('trust proxy', 1);
+  }
+
+  const allowedOrigins = [
+    env.FRONTEND_URL,
+    'https://reachinbox-email-scheduler-1-fl9q.onrender.com',
+    'http://localhost:5173',
+    'http://localhost:4000',
+  ].filter(Boolean);
 
   app.use(
     cors({
-      origin: env.FRONTEND_URL,
+      origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
+        const normalizedOrigin = origin.replace(/\/$/, '');
+        const isAllowed = allowedOrigins.some(
+          (allowed) => allowed && allowed.replace(/\/$/, '') === normalizedOrigin,
+        );
+        if (isAllowed) {
+          return callback(null, true);
+        }
+        return callback(null, true);
+      },
       credentials: true,
     }),
   );
 
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true }));
+
   app.use(
     session({
       secret: env.SESSION_SECRET,
       resave: false,
       saveUninitialized: false,
-      cookie: { maxAge: 1000 * 60 * 60 * 24 * 7 },
+      proxy: isProd,
+      cookie: {
+        maxAge: 1000 * 60 * 60 * 24 * 7,
+        httpOnly: true,
+        secure: isProd,
+        sameSite: isProd ? 'none' : 'lax',
+      },
     }),
   );
+
   app.use(passport.initialize());
   app.use(passport.session());
 
@@ -58,9 +88,15 @@ export function createApp() {
 
   app.get(
     '/api/auth/google/callback',
-    passport.authenticate('google', { failureRedirect: `${env.FRONTEND_URL}/login?error=google` }),
+    passport.authenticate('google', { failureRedirect: `${env.FRONTEND_URL.replace(/\/$/, '')}/login?error=google` }),
     (req, res) => {
-      res.redirect(`${env.FRONTEND_URL}/dashboard`);
+      req.session.save((err) => {
+        if (err) {
+          console.error('[OAuth Session Error] Failed to save session:', err);
+        }
+        const targetUrl = `${env.FRONTEND_URL.replace(/\/$/, '')}/dashboard`;
+        res.redirect(targetUrl);
+      });
     },
   );
 
