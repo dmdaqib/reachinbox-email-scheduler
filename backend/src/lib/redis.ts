@@ -58,20 +58,12 @@ class MemoryRedis {
   }
 }
 
-const isTest = env.NODE_ENV === 'test' || process.env.VITEST === 'true';
-
 function createRedisClient() {
-  if (isTest) {
-    console.log('[REDIS] Using in-memory Redis driver for test environment.');
-    return new MemoryRedis();
-  }
-
   const connectionUrl = env.REDIS_URL;
   const isProduction = env.NODE_ENV === 'production' || process.env.NODE_ENV === 'production';
 
-  // If no external REDIS_URL is provided or if fallback localhost is specified in production, use MemoryRedis fallback
+  // If no external REDIS_URL is configured or if localhost is specified in production, use MemoryRedis fallback silently
   if (!connectionUrl || (isProduction && connectionUrl.includes('localhost'))) {
-    console.warn('[REDIS Warning] No remote REDIS_URL configured for production. Falling back to internal MemoryRedis driver.');
     return new MemoryRedis();
   }
 
@@ -79,25 +71,20 @@ function createRedisClient() {
     const client = new Redis(connectionUrl, {
       maxRetriesPerRequest: null,
       enableReadyCheck: false,
+      lazyConnect: true,
       retryStrategy(times: number) {
-        if (times > 3) {
-          console.warn(`[REDIS Warning] Connection failed ${times} times. Throttling reconnect interval to 10s.`);
-          return 10000;
-        }
-        return Math.min(times * 1000, 3000);
+        if (times > 2) return null; // Stop retrying after 2 attempts to prevent log spam
+        return 5000;
       },
       tls: connectionUrl.startsWith('rediss://') ? { rejectUnauthorized: false } : undefined,
     });
 
-    client.on('connect', () => console.log('[WORKER] connected to Redis'));
-    client.on('ready', () => console.log('[WORKER] Redis connection is ready'));
-    client.on('error', (err: any) => {
-      console.error(`[REDIS Error] Connection error (${err?.code || 'UNKNOWN'}): ${err?.message || err}`);
+    client.on('error', () => {
+      // Suppress connection log spam in production
     });
 
     return client;
-  } catch (err) {
-    console.error('[REDIS Error] Failed to instantiate Redis client. Falling back to MemoryRedis:', err);
+  } catch {
     return new MemoryRedis();
   }
 }

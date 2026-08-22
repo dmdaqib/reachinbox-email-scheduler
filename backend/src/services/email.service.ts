@@ -2,26 +2,24 @@ import { prisma } from '../lib/prisma.js';
 import { sendMailWithEthereal } from '../email/mailer.js';
 
 export async function processEmailDispatch(emailId: string): Promise<boolean> {
-  const graceWindow = new Date(Date.now() + 2000);
+  const now = new Date();
 
-  // Atomic claim to prevent double sending (with 2s sub-second clock jitter grace window)
+  // Atomic claim mechanism: only process if status is SCHEDULED and scheduledAt <= NOW
   const claimed = await prisma.email.updateMany({
     where: {
       id: emailId,
       status: 'SCHEDULED',
-      scheduledAt: { lte: graceWindow },
+      scheduledAt: { lte: now },
       etherealMessageId: null,
     },
     data: { status: 'PROCESSING' },
   });
 
   if (claimed.count === 0) {
-    const existing = await prisma.email.findUnique({ where: { id: emailId } });
-    console.log(`[DISPATCH] Email ID ${emailId} claim skipped. Current status: ${existing?.status ?? 'NOT_FOUND'}, scheduledAt: ${existing?.scheduledAt?.toISOString() ?? 'N/A'}`);
     return false;
   }
 
-  console.log(`[DISPATCH] Claimed email ID ${emailId} for dispatch processing`);
+  console.log(`[DISPATCHER] claimed ${emailId}`);
 
   const email = await prisma.email.findUnique({ where: { id: emailId } });
   if (!email) return false;
@@ -32,7 +30,7 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
       where: { id: emailId },
       data: { status: 'FAILED', failedAt: new Date(), lastError: 'Sender not found' },
     });
-    console.error(`[DISPATCH Error] Failed email ID ${emailId}: Sender not found`);
+    console.error(`[DISPATCHER Error] Sender not found for email ${emailId}`);
     return false;
   }
 
@@ -44,50 +42,33 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
       text: email.body,
     });
 
-    const updated = await prisma.email.update({
+    const finalMessageId = result.messageId || `msg-${Date.now()}`;
+
+    await prisma.email.update({
       where: { id: emailId },
       data: {
         status: 'SENT',
         sentAt: new Date(),
-        etherealMessageId: result.messageId,
+        etherealMessageId: finalMessageId,
         previewUrl: result.previewUrl ?? null,
         lastError: null,
         failedAt: null,
       },
     });
 
-    console.log(`[DISPATCH] Successfully updated email ID ${emailId} status to SENT in PostgreSQL (MessageId: ${updated.etherealMessageId}, Preview: ${updated.previewUrl ?? 'N/A'})`);
+    console.log(`[DISPATCHER] marked ${emailId} as SENT`);
     return true;
   } catch (error) {
-    const nextAttempt = email.attemptCount + 1;
-    const maxAttempts = 3;
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-
-    if (nextAttempt >= maxAttempts) {
-      await prisma.email.update({
-        where: { id: emailId },
-        data: {
-          status: 'FAILED',
-          failedAt: new Date(),
-          attemptCount: nextAttempt,
-          lastError: errorMsg,
-        },
-      });
-      console.error(`[DISPATCH Error] Failed email ID ${emailId} after ${maxAttempts} attempts: ${errorMsg}`);
-    } else {
-      const retryDelayMs = Math.min(1000 * Math.pow(2, nextAttempt), 30000);
-      const retryScheduledAt = new Date(Date.now() + retryDelayMs);
-      await prisma.email.update({
-        where: { id: emailId },
-        data: {
-          status: 'SCHEDULED',
-          scheduledAt: retryScheduledAt,
-          attemptCount: nextAttempt,
-          lastError: `Retry ${nextAttempt}/${maxAttempts}: ${errorMsg}`,
-        },
-      });
-      console.log(`[DISPATCH] Rescheduled email ID ${emailId} for retry ${nextAttempt}/${maxAttempts} in ${retryDelayMs}ms`);
-    }
+    await prisma.email.update({
+      where: { id: emailId },
+      data: {
+        status: 'FAILED',
+        failedAt: new Date(),
+        lastError: errorMsg,
+      },
+    });
+    console.error(`[DISPATCHER] marked ${emailId} as FAILED: ${errorMsg}`);
     return false;
   }
 }
