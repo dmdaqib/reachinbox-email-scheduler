@@ -9,28 +9,55 @@ export function clearCachedTransport() {
   cachedAccount = null;
 }
 
+export function printSmtpStartupConfig() {
+  const isProd = env.NODE_ENV === 'production' || process.env.NODE_ENV === 'production';
+  const hasUser = Boolean(env.ETHEREAL_USER && env.ETHEREAL_USER.trim());
+  const hasPass = Boolean(env.ETHEREAL_PASS && env.ETHEREAL_PASS.trim());
+  const host = env.ETHEREAL_HOST || 'smtp.ethereal.email';
+  const port = env.ETHEREAL_PORT || 587;
+
+  console.log(`[SMTP-CONFIG] Environment: ${env.NODE_ENV}`);
+  console.log(`[SMTP-CONFIG] ETHEREAL_USER configured: ${hasUser}`);
+  console.log(`[SMTP-CONFIG] ETHEREAL_PASS configured: ${hasPass}`);
+  console.log(`[SMTP-CONFIG] ETHEREAL_HOST: ${host}`);
+  console.log(`[SMTP-CONFIG] ETHEREAL_PORT: ${port}`);
+
+  if (isProd && (!hasUser || !hasPass)) {
+    console.error(
+      '[CONFIG ERROR] Missing required production environment variables: ETHEREAL_USER and/or ETHEREAL_PASS. Production SMTP cannot rely on dynamic test account generation.',
+    );
+  }
+}
+
 export async function getTransport() {
   if (cachedTransport) return cachedTransport;
 
+  const isProd = env.NODE_ENV === 'production' || process.env.NODE_ENV === 'production';
   let user = env.ETHEREAL_USER || cachedAccount?.user;
   let pass = env.ETHEREAL_PASS || cachedAccount?.pass;
   let host = env.ETHEREAL_HOST || cachedAccount?.host || 'smtp.ethereal.email';
   let port = env.ETHEREAL_PORT || cachedAccount?.port || 587;
 
-  console.log(`[SMTP] Initializing transporter (host=${host}:${port}, userConfigured=${Boolean(user)})`);
+  console.log(`[SMTP-TRACE] START transporter initialization (host=${host}:${port}, userConfigured=${Boolean(user)})`);
 
   if (!user || !pass) {
+    if (isProd) {
+      throw new Error(
+        'Ethereal SMTP credentials could not be established. Please set ETHEREAL_USER and ETHEREAL_PASS environment variables in Render.',
+      );
+    }
+
     try {
-      console.log('[SMTP] Attempting automatic Ethereal test account generation...');
+      console.log('[SMTP-TRACE] Local development fallback: Attempting automatic Ethereal test account generation...');
       const testAccount = await nodemailer.createTestAccount();
       user = testAccount.user;
       pass = testAccount.pass;
       host = testAccount.smtp.host;
       port = testAccount.smtp.port;
       cachedAccount = { user, pass, host, port };
-      console.log(`[SMTP] Auto-generated Ethereal test account: ${user}`);
+      console.log(`[SMTP-TRACE] Auto-generated local Ethereal test account: ${user}`);
     } catch (err) {
-      console.warn('[SMTP Error] Failed to create Ethereal test account automatically:', err instanceof Error ? err.message : err);
+      console.warn('[SMTP Error] Failed to create local Ethereal test account automatically:', err instanceof Error ? err.message : err);
     }
   }
 
@@ -51,7 +78,7 @@ export async function getTransport() {
     },
   });
 
-  console.log(`[SMTP] Transporter ready for host ${host}:${port}`);
+  console.log(`[SMTP-TRACE] Transporter ready for host ${host}:${port}`);
   return cachedTransport;
 }
 
@@ -87,9 +114,9 @@ export async function sendMailWithEthereal({
     const finalMessageId = result.messageId || `msg-${Date.now()}`;
     const finalPreview = typeof previewUrl === 'string' ? previewUrl : undefined;
 
-    console.log(`[SMTP] Successfully delivered email ID ${logId} to ${to} (MessageId: ${finalMessageId})`);
+    console.log(`[SMTP-TRACE] sendMail SUCCESS email=${logId} messageId=${finalMessageId}`);
     if (finalPreview) {
-      console.log(`[SMTP] Ethereal Preview URL: ${finalPreview}`);
+      console.log(`[SMTP] previewUrl=${finalPreview}`);
     }
 
     return {
