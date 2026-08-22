@@ -2,7 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { sendMailWithEthereal } from '../email/mailer.js';
 
 export async function processEmailDispatch(emailId: string): Promise<boolean> {
-  // Atomic claim to prevent duplicate sends
+  // Atomic claim to prevent double sending
   const claimed = await prisma.email.updateMany({
     where: {
       id: emailId,
@@ -17,6 +17,8 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
     return false;
   }
 
+  console.log(`[DISPATCH] Claimed email ID ${emailId} for dispatch processing`);
+
   const email = await prisma.email.findUnique({ where: { id: emailId } });
   if (!email) return false;
 
@@ -26,12 +28,11 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
       where: { id: emailId },
       data: { status: 'FAILED', failedAt: new Date(), lastError: 'Sender not found' },
     });
-    console.error(`[WORKER] failed email ID ${emailId}: Sender not found`);
+    console.error(`[DISPATCH Error] Failed email ID ${emailId}: Sender not found`);
     return false;
   }
 
   try {
-    console.log(`[WORKER] sending email ID ${emailId} to ${email.toEmail}...`);
     const result = await sendMailWithEthereal({
       from: `${sender.displayName} <${sender.email}>`,
       to: email.toEmail,
@@ -44,13 +45,13 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
       data: {
         status: 'SENT',
         sentAt: new Date(),
-        etherealMessageId: result.messageId ?? `msg-${Date.now()}`,
+        etherealMessageId: result.messageId,
         previewUrl: result.previewUrl ?? null,
         lastError: null,
         failedAt: null,
       },
     });
-    console.log(`[WORKER] sent email ID ${emailId} successfully (MessageId: ${result.messageId})`);
+    console.log(`[DISPATCH] Updated email ID ${emailId} status to SENT in PostgreSQL (MessageId: ${result.messageId})`);
     return true;
   } catch (error) {
     const nextAttempt = email.attemptCount + 1;
@@ -67,7 +68,7 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
           lastError: errorMsg,
         },
       });
-      console.error(`[WORKER] failed email ID ${emailId} after ${maxAttempts} attempts: ${errorMsg}`);
+      console.error(`[DISPATCH Error] Failed email ID ${emailId} after ${maxAttempts} attempts: ${errorMsg}`);
     } else {
       const retryDelayMs = Math.min(1000 * Math.pow(2, nextAttempt), 30000);
       const retryScheduledAt = new Date(Date.now() + retryDelayMs);
@@ -80,6 +81,7 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
           lastError: `Retry ${nextAttempt}/${maxAttempts}: ${errorMsg}`,
         },
       });
+      console.log(`[DISPATCH] Rescheduled email ID ${emailId} for retry ${nextAttempt}/${maxAttempts} in ${retryDelayMs}ms`);
     }
     return false;
   }

@@ -80,6 +80,7 @@ export async function scheduleEmailsForUser(userId: string, input: ScheduleReque
 
   // 1. Save scheduled email records to PostgreSQL
   await prisma.email.createMany({ data: preparedRows });
+  console.log(`[SCHEDULE] Created ${preparedRows.length} email records in PostgreSQL with status SCHEDULED`);
 
   const records = (await prisma.email.findMany({
     where: { id: { in: preparedRows.map((row) => row.id) } },
@@ -91,11 +92,11 @@ export async function scheduleEmailsForUser(userId: string, input: ScheduleReque
     status: string;
   }>;
 
-  // 2. Enqueue each job to Redis/BullMQ. If Redis is unavailable, delete database records and fail scheduling.
-  try {
-    for (const row of records) {
+  // 2. Non-blocking Queue Enqueue: Attempt to enqueue each job to Redis/BullMQ with 2s timeout
+  for (const row of records) {
+    try {
       const delay = Math.max(0, new Date(row.scheduledAt).getTime() - Date.now());
-      await queue.add(
+      const enqueuePromise = queue.add(
         'email-send',
         { emailId: row.id },
         {
@@ -105,14 +106,17 @@ export async function scheduleEmailsForUser(userId: string, input: ScheduleReque
           removeOnFail: true,
         },
       );
-      console.log(`[QUEUE] enqueued email ID ${row.id}`);
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Redis enqueue timeout')), 2000),
+      );
+      await Promise.race([enqueuePromise, timeoutPromise]);
+      console.log(`[SCHEDULE] Enqueued email ID ${row.id} to BullMQ queue with delay ${delay}ms`);
+    } catch (queueError) {
+      console.warn(
+        `[SCHEDULE Warning] Redis enqueue timed out/deferred for email ID ${row.id}. Email is persisted in DB and will be dispatched by DB ticker at scheduledAt:`,
+        queueError instanceof Error ? queueError.message : queueError,
+      );
     }
-  } catch (queueError) {
-    console.error('[QUEUE Error] Failed to enqueue job to BullMQ queue:', queueError);
-    await prisma.email.deleteMany({
-      where: { id: { in: records.map((r) => r.id) } },
-    });
-    throw new Error('Failed to enqueue job to Redis queue. Please check Redis connection.');
   }
 
   return {
@@ -175,12 +179,16 @@ export async function cancelScheduledEmail(userId: string, emailId: string) {
 
   if (updated.count > 0) {
     const jobId = `email-${emailId}`;
-    const existingJob = await queue.getJob(jobId);
-    if (existingJob) {
-      const isActive = await existingJob.isActive().catch(() => false);
-      if (!isActive) {
-        await existingJob.remove().catch(() => {});
+    try {
+      const existingJob = await queue.getJob(jobId);
+      if (existingJob) {
+        const isActive = await existingJob.isActive().catch(() => false);
+        if (!isActive) {
+          await existingJob.remove().catch(() => {});
+        }
       }
+    } catch {
+      // Redis cleanup timeout ignore
     }
   }
 

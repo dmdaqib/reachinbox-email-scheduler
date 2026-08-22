@@ -18,9 +18,9 @@ export async function getTransport() {
       pass = testAccount.pass;
       host = testAccount.smtp.host;
       port = testAccount.smtp.port;
-      console.log(`[Ethereal] Auto-generated test account: ${user}`);
+      console.log(`[SMTP] Auto-generated Ethereal test account: ${user}`);
     } catch (err) {
-      console.warn('[Ethereal] Failed to create test account automatically:', err);
+      console.warn('[SMTP Error] Failed to create test account automatically:', err);
     }
   }
 
@@ -31,6 +31,7 @@ export async function getTransport() {
     auth: user && pass ? { user, pass } : undefined,
   });
 
+  console.log(`[SMTP] Transporter initialized for host ${host}:${port}`);
   return cachedTransport;
 }
 
@@ -45,6 +46,7 @@ export async function sendMailWithEthereal({
   subject: string;
   text: string;
 }) {
+  console.log(`[SMTP] Dispatching email to ${to} (Subject: "${subject}")`);
   const transport = await getTransport();
   try {
     const result = (await transport.sendMail({
@@ -59,14 +61,21 @@ export async function sendMailWithEthereal({
     };
 
     const previewUrl = nodemailer.getTestMessageUrl(result as any);
+    const finalMessageId = result.messageId || `msg-${Date.now()}`;
+    const finalPreview = typeof previewUrl === 'string' ? previewUrl : undefined;
+
+    console.log(`[SMTP] Successfully delivered email to ${to} (MessageId: ${finalMessageId})`);
+    if (finalPreview) {
+      console.log(`[SMTP] Ethereal Preview URL: ${finalPreview}`);
+    }
 
     return {
-      messageId: result.messageId ?? undefined,
-      previewUrl: typeof previewUrl === 'string' ? previewUrl : undefined,
+      messageId: finalMessageId,
+      previewUrl: finalPreview,
     };
   } catch (error) {
+    console.error(`[SMTP Error] Failed to send email to ${to}:`, error instanceof Error ? error.message : error);
     cachedTransport = null;
     throw error;
   }
 }
-

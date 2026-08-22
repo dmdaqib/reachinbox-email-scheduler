@@ -23,7 +23,7 @@ export async function reconcileStaleJobs() {
     });
   }
 
-  // 2. Process any due SCHEDULED emails (scheduledAt <= NOW) immediately
+  // 2. Process any due SCHEDULED emails (scheduledAt <= NOW) immediately via DB atomic dispatch
   const dueEmails = await prisma.email.findMany({
     where: {
       status: 'SCHEDULED',
@@ -34,6 +34,10 @@ export async function reconcileStaleJobs() {
     orderBy: { scheduledAt: 'asc' },
   });
 
+  if (dueEmails.length > 0) {
+    console.log(`[RECONCILE] Found ${dueEmails.length} due scheduled emails in PostgreSQL`);
+  }
+
   let dispatchedCount = 0;
   for (const email of dueEmails) {
     const success = await processEmailDispatch(email.id);
@@ -43,45 +47,55 @@ export async function reconcileStaleJobs() {
   }
 
   // 3. Re-enqueue future SCHEDULED emails (scheduledAt > NOW) missing an active BullMQ job
-  const futureScheduledEmails = await prisma.email.findMany({
-    where: {
-      status: 'SCHEDULED',
-      scheduledAt: { gt: new Date() },
-      etherealMessageId: null,
-    },
-  });
-
   let reQueuedCount = 0;
-  for (const email of futureScheduledEmails) {
-    const jobId = `email-${email.id}`;
-    const existingJob = await queue.getJob(jobId);
-    const state = existingJob ? await existingJob.getState().catch(() => null) : null;
-
-    if (state === 'delayed' || state === 'waiting' || state === 'active') {
-      continue;
-    }
-
-    if (existingJob) {
-      await existingJob.remove().catch(() => {});
-    }
-
-    const delay = Math.max(0, new Date(email.scheduledAt).getTime() - Date.now());
-    await queue.add(
-      'email-send',
-      { emailId: email.id },
-      {
-        jobId,
-        delay,
-        removeOnComplete: true,
-        removeOnFail: true,
+  try {
+    const futureScheduledEmails = await prisma.email.findMany({
+      where: {
+        status: 'SCHEDULED',
+        scheduledAt: { gt: new Date() },
+        etherealMessageId: null,
       },
-    );
-    console.log(`[QUEUE] enqueued future email ID ${email.id}`);
-    reQueuedCount += 1;
+    });
+
+    for (const email of futureScheduledEmails) {
+      const jobId = `email-${email.id}`;
+      try {
+        const getJobPromise = queue.getJob(jobId);
+        const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000));
+        const existingJob = await Promise.race([getJobPromise, timeoutPromise]);
+        const state = existingJob ? await existingJob.getState().catch(() => null) : null;
+
+        if (state === 'delayed' || state === 'waiting' || state === 'active') {
+          continue;
+        }
+
+        if (existingJob) {
+          await existingJob.remove().catch(() => {});
+        }
+
+        const delay = Math.max(0, new Date(email.scheduledAt).getTime() - Date.now());
+        await queue.add(
+          'email-send',
+          { emailId: email.id },
+          {
+            jobId,
+            delay,
+            removeOnComplete: true,
+            removeOnFail: true,
+          },
+        );
+        console.log(`[QUEUE] Re-enqueued future email ID ${email.id} (Delay: ${delay}ms)`);
+        reQueuedCount += 1;
+      } catch {
+        // Safe timeout fallback
+      }
+    }
+  } catch {
+    // Database or Queue timeout fallback
   }
 
-  if (dueEmails.length > 0 || reQueuedCount > 0) {
-    console.log(`[RECONCILE] Processed ${dispatchedCount} due emails, re-queued ${reQueuedCount} future jobs.`);
+  if (dispatchedCount > 0 || reQueuedCount > 0) {
+    console.log(`[RECONCILE] Completed scan: Dispatched ${dispatchedCount} due emails, re-queued ${reQueuedCount} future jobs.`);
   }
 
   return { dispatchedCount, reQueuedCount, staleCount: staleProcessing.length };
@@ -91,6 +105,7 @@ let periodicTimer: NodeJS.Timeout | null = null;
 
 export function startPeriodicReconciliation(intervalMs = 5000) {
   if (periodicTimer) return;
+  console.log(`[RECONCILE] Initializing periodic reconciliation ticker (${intervalMs}ms interval)`);
   periodicTimer = setInterval(async () => {
     try {
       await reconcileStaleJobs();
