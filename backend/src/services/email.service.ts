@@ -9,7 +9,9 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
   // Fetch initial status for tracing
   const initialEmail = await prisma.email.findUnique({ where: { id: emailId } });
   if (initialEmail) {
-    console.log(`[DISPATCH-TRACE] status=${initialEmail.status} scheduledAt=${initialEmail.scheduledAt.toISOString()}`);
+    console.log(
+      `[DISPATCH-TRACE] DATABASE READ status=${initialEmail.status} scheduledAt=${initialEmail.scheduledAt.toISOString()} recipient=${initialEmail.toEmail}`,
+    );
   }
 
   // Atomic claim mechanism: only process if status is SCHEDULED and scheduledAt <= NOW
@@ -23,7 +25,7 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
     data: { status: 'PROCESSING' },
   });
 
-  console.log(`[DISPATCH-TRACE] CLAIM RESULT email=${emailId} count=${claimed.count}`);
+  console.log(`[DISPATCH-TRACE] CLAIM RESULT count=${claimed.count}`);
 
   if (claimed.count === 0) {
     return false;
@@ -35,24 +37,18 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
   const sender = await prisma.sender.findUnique({ where: { id: email.senderId } });
   if (!sender) {
     const error = new Error('Sender not found');
-    console.error(`[DISPATCH-ERROR] email=${emailId}`);
-    console.error(`[DISPATCH-ERROR] name=${error.name}`);
-    console.error(`[DISPATCH-ERROR] message=${error.message}`);
-    console.error(`[DISPATCH-ERROR] stack=${error.stack}`);
-
-    console.log(`[DISPATCH-FAIL] BEFORE FAILED UPDATE email=${emailId}`);
+    console.error(`[DISPATCH-TRACE] FINAL FAILURE email=${emailId} stage=SENDER_LOOKUP error=${error.message}`);
     await prisma.email.update({
       where: { id: emailId },
       data: { status: 'FAILED', failedAt: new Date(), lastError: error.message },
     });
-    console.log(`[DISPATCH-FAIL] FAILED UPDATE SUCCESS email=${emailId}`);
     return false;
   }
 
   let smtpResult: { messageId: string; previewUrl?: string } | null = null;
 
   try {
-    console.log(`[DISPATCH-TRACE] BEFORE SMTP email=${emailId}`);
+    console.log('[DISPATCH-TRACE] BEFORE SMTP');
     smtpResult = await sendMailWithEthereal({
       emailId,
       from: `${sender.displayName} <${sender.email}>`,
@@ -62,27 +58,23 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
     });
   } catch (error: any) {
     const errObj = error instanceof Error ? error : new Error(String(error));
-    console.error(`[DISPATCH-ERROR] email=${emailId}`);
-    console.error(`[DISPATCH-ERROR] name=${errObj.name}`);
-    console.error(`[DISPATCH-ERROR] message=${errObj.message}`);
-    console.error(`[DISPATCH-ERROR] stack=${errObj.stack || errObj.message}`);
+    const errorMsg = errObj.stack || errObj.message;
+    console.error(`[DISPATCH-TRACE] FINAL FAILURE email=${emailId} stage=SMTP_DISPATCH error=${errorMsg}`);
 
-    console.log(`[DISPATCH-FAIL] BEFORE FAILED UPDATE email=${emailId}`);
     await prisma.email.update({
       where: { id: emailId },
       data: {
         status: 'FAILED',
         failedAt: new Date(),
-        lastError: errObj.stack || errObj.message,
+        lastError: errorMsg,
       },
     });
-    console.log(`[DISPATCH-FAIL] FAILED UPDATE SUCCESS email=${emailId}`);
     return false;
   }
 
   // SMTP SUCCEEDED! If DB update encounters an issue, DO NOT mark as FAILED! Preserve messageId & previewUrl!
   try {
-    console.log(`[DISPATCH-TRACE] BEFORE SENT DATABASE UPDATE email=${emailId}`);
+    console.log('[DISPATCH-TRACE] BEFORE SENT DATABASE UPDATE');
     await prisma.email.update({
       where: { id: emailId },
       data: {
@@ -94,15 +86,12 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
         failedAt: null,
       },
     });
-    console.log(`[DISPATCH-TRACE] SENT DATABASE UPDATE SUCCESS email=${emailId}`);
+    console.log('[DISPATCH-TRACE] SENT DATABASE UPDATE SUCCESS');
     console.log(`[DISPATCH-TRACE] COMPLETE email=${emailId}`);
     return true;
   } catch (dbError: any) {
     const dbErrObj = dbError instanceof Error ? dbError : new Error(String(dbError));
-    console.error(`[DISPATCH-ERROR] DB update to SENT failed for email=${emailId}`);
-    console.error(`[DISPATCH-ERROR] name=${dbErrObj.name}`);
-    console.error(`[DISPATCH-ERROR] message=${dbErrObj.message}`);
-    console.error(`[DISPATCH-ERROR] stack=${dbErrObj.stack || dbErrObj.message}`);
+    console.error(`[DISPATCH-TRACE] SENT DATABASE UPDATE ERROR error=${dbErrObj.message}`);
 
     try {
       await prisma.email.update({
@@ -115,11 +104,11 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
           lastError: `SMTP succeeded (messageId=${smtpResult.messageId}), but DB update notice: ${dbErrObj.message}`,
         },
       });
-      console.log(`[DISPATCH-TRACE] SENT DATABASE UPDATE SUCCESS (fallback) email=${emailId}`);
+      console.log('[DISPATCH-TRACE] SENT DATABASE UPDATE SUCCESS (fallback)');
       console.log(`[DISPATCH-TRACE] COMPLETE email=${emailId}`);
       return true;
     } catch (fallbackErr: any) {
-      console.error(`[DISPATCH-ERROR] Fatal DB update error for email=${emailId}:`, fallbackErr);
+      console.error(`[DISPATCH-TRACE] FINAL FAILURE email=${emailId} stage=SENT_DB_UPDATE error=${dbErrObj.message}`);
       return false;
     }
   }

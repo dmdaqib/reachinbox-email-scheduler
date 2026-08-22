@@ -3,6 +3,10 @@ import { env } from './config/env.js';
 import { prisma } from './lib/prisma.js';
 import { startDispatcher } from './services/dispatcher.js';
 
+if (!process.env.DATABASE_URL) {
+  console.error('[CONFIG ERROR] Missing required production environment variable: DATABASE_URL');
+}
+
 const app = createApp();
 
 app.listen(env.PORT, async () => {
