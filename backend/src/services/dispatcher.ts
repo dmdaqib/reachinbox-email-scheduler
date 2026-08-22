@@ -5,7 +5,6 @@ let dispatchRunning = false;
 
 export async function runDispatcherTick() {
   const timestamp = new Date().toISOString();
-  console.log(`[DISPATCH-LIFECYCLE] timer callback FIRED PID=${process.pid} time=${timestamp}`);
 
   if (dispatchRunning) {
     console.log(`[DISPATCH-DEBUG] Tick skipped: previous tick still in progress at ${timestamp}`);
@@ -39,7 +38,24 @@ export async function runDispatcherTick() {
       orderBy: { scheduledAt: 'asc' },
     });
 
-    console.log(`[DISPATCHER] TICK PID=${process.pid} time=${timestamp} found=${dueEmails.length}`);
+    console.log(`[DISPATCH-QUERY] serverNow=${timestamp} scheduledStatus=SCHEDULED found=${dueEmails.length}`);
+
+    if (dueEmails.length === 0) {
+      const recentEmails = await prisma.email.findMany({
+        take: 5,
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          status: true,
+          scheduledAt: true,
+        },
+      });
+
+      for (const r of recentEmails) {
+        const diff = r.scheduledAt.getTime() - Date.now();
+        console.log(`[DISPATCH-DEBUG-ROW] emailId=${r.id} status=${r.status} scheduledAt=${r.scheduledAt.toISOString()} serverNow=${timestamp} timeDifferenceMs=${diff}`);
+      }
+    }
 
     for (const email of dueEmails) {
       console.log(`[DISPATCH-LIFECYCLE] processEmailDispatch ENTERED email=${email.id}`);

@@ -8,6 +8,11 @@ printSmtpStartupConfig();
 
 if (!process.env.DATABASE_URL) {
   console.error('[CONFIG ERROR] Missing required production environment variable: DATABASE_URL');
+} else {
+  const dbUrl = process.env.DATABASE_URL;
+  const match = dbUrl.match(/@([^/:]+)(?::(\d+))?\/([^?]+)/);
+  const safeDbHost = match ? `${match[1]}/${match[3]}` : 'configured';
+  console.log(`[DATABASE-IDENTITY] Connected PostgreSQL host/db: ${safeDbHost}`);
 }
 
 const app = createApp();

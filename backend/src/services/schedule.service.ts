@@ -90,7 +90,20 @@ export async function scheduleEmailsForUser(userId: string, input: ScheduleReque
     status: string;
   }>;
 
-  console.log(`[SCHEDULE] Successfully created ${records.length} scheduled email records in PostgreSQL.`);
+  console.log('[SCHEDULE-DIAG] CREATE SUCCESS');
+  records.forEach((rec) => {
+    console.log(`[SCHEDULE-DIAG] emailId=${rec.id}`);
+    console.log(`[SCHEDULE-DIAG] status=${rec.status}`);
+    console.log(`[SCHEDULE-DIAG] scheduledAt=${rec.scheduledAt.toISOString()}`);
+    console.log(`[SCHEDULE-DIAG] serverNow=${new Date().toISOString()}`);
+
+    console.log('[SCHEDULE-TIME-TRACE]');
+    console.log(`[SCHEDULE-TIME-TRACE] clientValue=${input.startAt}`);
+    console.log(`[SCHEDULE-TIME-TRACE] serverParsed=${startAt.toISOString()}`);
+    console.log(`[SCHEDULE-TIME-TRACE] databaseValue=${rec.scheduledAt.toISOString()}`);
+    console.log(`[SCHEDULE-TIME-TRACE] serverNow=${new Date().toISOString()}`);
+    console.log(`[SCHEDULE-TIME-TRACE] differenceMs=${rec.scheduledAt.getTime() - Date.now()}`);
+  });
 
   return {
     acceptedCount: records.length,
