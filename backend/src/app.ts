@@ -46,7 +46,15 @@ export function createApp() {
     res.json({ ok: true, status: 'healthy' });
   });
 
-  app.get('/api/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+  app.get('/api/auth/google', (req, res, next) => {
+    if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
+      return res.status(500).json({
+        error: 'Google OAuth Misconfigured',
+        message: 'GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables must be configured on Render.',
+      });
+    }
+    passport.authenticate('google', { scope: ['profile', 'email'] })(req, res, next);
+  });
 
   app.get(
     '/api/auth/google/callback',

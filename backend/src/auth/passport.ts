@@ -3,18 +3,6 @@ import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import { env } from '../config/env.js';
 import { prisma } from '../lib/prisma.js';
 
-if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
-  console.warn('Google OAuth credentials are not configured. Authentication routes will fail until .env is populated.');
-}
-
-if (env.GOOGLE_CLIENT_ID) {
-  const id = env.GOOGLE_CLIENT_ID;
-  const masked = id.length > 12 ? `${id.slice(0, 6)}...${id.slice(-10)}` : id;
-  console.log(`[Google OAuth Diagnostic] GOOGLE_CLIENT_ID is loaded: ${masked}`);
-} else {
-  console.warn('[Google OAuth Diagnostic] GOOGLE_CLIENT_ID is NOT loaded (using fallback dummy ID).');
-}
-
 passport.serializeUser((user: Express.User, done) => {
   done(null, user.id);
 });
@@ -31,15 +19,26 @@ passport.deserializeUser(async (id: string, done) => {
   }
 });
 
-passport.use(
-  new GoogleStrategy(
-    {
-      clientID: env.GOOGLE_CLIENT_ID || 'demo-google-client-id.apps.googleusercontent.com',
-      clientSecret: env.GOOGLE_CLIENT_SECRET || 'demo-google-client-secret',
-      callbackURL: `${env.BACKEND_URL}/api/auth/google/callback`,
-      scope: ['profile', 'email'],
-    },
-    async (_accessToken, _refreshToken, profile, done) => {
+const googleClientId = env.GOOGLE_CLIENT_ID || (env.NODE_ENV === 'test' ? 'test-google-client-id' : '');
+const googleClientSecret = env.GOOGLE_CLIENT_SECRET || (env.NODE_ENV === 'test' ? 'test-google-client-secret' : '');
+const callbackURL = `${env.BACKEND_URL.replace(/\/$/, '')}/api/auth/google/callback`;
+
+if (googleClientId && googleClientSecret) {
+  const maskedId = googleClientId.length > 12
+    ? `${googleClientId.slice(0, 6)}...${googleClientId.slice(-10)}`
+    : googleClientId;
+  console.log(`[Google OAuth Config] Loaded GOOGLE_CLIENT_ID: ${maskedId}`);
+  console.log(`[Google OAuth Config] Registered OAuth Callback URL: ${callbackURL}`);
+
+  passport.use(
+    new GoogleStrategy(
+      {
+        clientID: googleClientId,
+        clientSecret: googleClientSecret,
+        callbackURL,
+        scope: ['profile', 'email'],
+      },
+      async (_accessToken, _refreshToken, profile, done) => {
       try {
         if (!profile.emails?.[0]?.value) {
           return done(new Error('Google account email is required'));
@@ -107,5 +106,6 @@ passport.use(
     },
   ),
 );
+}
 
 export default passport;
