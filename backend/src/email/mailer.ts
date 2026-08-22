@@ -78,6 +78,33 @@ export async function getTransport() {
     },
   });
 
+  console.log(`[SMTP-DIAG] host=${host}`);
+  console.log(`[SMTP-DIAG] port=${port}`);
+  console.log(`[SMTP-DIAG] secure=${port === 465}`);
+  console.log(`[SMTP-DIAG] userConfigured=${Boolean(user)}`);
+  console.log(`[SMTP-DIAG] passConfigured=${Boolean(pass)}`);
+
+  console.log('[SMTP-DIAG] transporter.verify START');
+  try {
+    const transportToVerify = cachedTransport;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('SMTP transporter verify timed out after 8s')), 8000);
+      transportToVerify.verify((err) => {
+        clearTimeout(timer);
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+    console.log('[SMTP-DIAG] transporter.verify SUCCESS');
+  } catch (verifyErr: any) {
+    const sanitizedMsg = verifyErr instanceof Error ? verifyErr.message : String(verifyErr);
+    const sanitizedStack = verifyErr instanceof Error ? verifyErr.stack : sanitizedMsg;
+    console.error('[SMTP-DIAG] transporter.verify FAILED');
+    console.error(`[SMTP-DIAG] error=${sanitizedStack}`);
+    cachedTransport = null;
+    throw verifyErr;
+  }
+
   console.log(`[SMTP-TRACE] Transporter ready for host ${host}:${port}`);
   return cachedTransport;
 }
