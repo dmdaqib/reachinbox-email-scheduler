@@ -11,6 +11,7 @@ import { parseRecipientList } from './email/parseRecipients.js';
 import { queue } from './queue/email.queue.js';
 import multer from 'multer';
 import { z } from 'zod';
+import { generateAuthToken } from './auth/token.js';
 
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
@@ -94,7 +95,12 @@ export function createApp() {
         if (err) {
           console.error('[OAuth Session Error] Failed to save session:', err);
         }
-        const targetUrl = `${env.FRONTEND_URL.replace(/\/$/, '')}/dashboard`;
+        const user = req.user as { id?: string } | undefined;
+        const token = user?.id ? generateAuthToken(user.id) : '';
+        const frontendUrl = env.FRONTEND_URL.replace(/\/$/, '');
+        const targetUrl = token
+          ? `${frontendUrl}/dashboard?token=${encodeURIComponent(token)}`
+          : `${frontendUrl}/dashboard`;
         res.redirect(targetUrl);
       });
     },

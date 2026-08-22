@@ -18,26 +18,43 @@ export function DashboardPage() {
   const [fetching, setFetching] = useState(true);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
+  const getAuthHeaders = (): Record<string, string> => {
+    const token = localStorage.getItem('auth_token');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
   const loadData = async () => {
     try {
       setFetching(true);
-      const meRes = await fetch(`${API_URL}/api/auth/me`, { credentials: 'include' });
+
+      // Extract ?token= query parameter from Google OAuth redirect URL if present
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlToken = urlParams.get('token');
+      if (urlToken) {
+        localStorage.setItem('auth_token', urlToken);
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+      }
+
+      const headers = getAuthHeaders();
+      const meRes = await fetch(`${API_URL}/api/auth/me`, { credentials: 'include', headers });
       if (!meRes.ok) {
+        localStorage.removeItem('auth_token');
         window.location.href = '/login';
         return;
       }
       const me = await meRes.json();
       setUser(me);
 
-      const sendersRes = await fetch(`${API_URL}/api/senders`, { credentials: 'include' });
+      const sendersRes = await fetch(`${API_URL}/api/senders`, { credentials: 'include', headers });
       const senderList = await sendersRes.json();
       setSenders(Array.isArray(senderList) ? senderList : []);
 
-      const scheduledRes = await fetch(`${API_URL}/api/emails/scheduled?page=1&limit=50`, { credentials: 'include' });
+      const scheduledRes = await fetch(`${API_URL}/api/emails/scheduled?page=1&limit=50`, { credentials: 'include', headers });
       const scheduledList = await scheduledRes.json();
       setScheduled(Array.isArray(scheduledList) ? scheduledList : []);
 
-      const sentRes = await fetch(`${API_URL}/api/emails/sent`, { credentials: 'include' });
+      const sentRes = await fetch(`${API_URL}/api/emails/sent`, { credentials: 'include', headers });
       const sentList = await sentRes.json();
       setSent(Array.isArray(sentList) ? sentList : []);
     } catch (error) {
@@ -57,10 +74,12 @@ export function DashboardPage() {
 
   const handleLogout = async () => {
     try {
-      await fetch(`${API_URL}/api/auth/logout`, { method: 'POST', credentials: 'include' });
+      const headers = getAuthHeaders();
+      await fetch(`${API_URL}/api/auth/logout`, { method: 'POST', credentials: 'include', headers });
     } catch (e) {
       console.error(e);
     }
+    localStorage.removeItem('auth_token');
     window.location.href = '/login';
   };
 
@@ -99,6 +118,7 @@ export function DashboardPage() {
       const response = await fetch(`${API_URL}/api/emails/schedule`, {
         method: 'POST',
         credentials: 'include',
+        headers: getAuthHeaders(),
         body: form,
       });
 
@@ -131,6 +151,7 @@ export function DashboardPage() {
       const response = await fetch(`${API_URL}/api/emails/${emailId}/cancel`, {
         method: 'POST',
         credentials: 'include',
+        headers: getAuthHeaders(),
       });
       const data = await response.json();
       if (!response.ok) {
