@@ -18,6 +18,7 @@ export function printSmtpStartupConfig() {
 
   console.log(`[SMTP-CONFIG] Environment: ${env.NODE_ENV}`);
   console.log(`[SMTP-CONFIG] RESEND_API_KEY configured: ${hasResend}`);
+  console.log(`[SMTP-CONFIG] RESEND_FROM_EMAIL configured: ${env.RESEND_FROM_EMAIL ?? 'onboarding@resend.dev'}`);
   console.log(`[SMTP-CONFIG] ETHEREAL_USER configured: ${hasUser}`);
   console.log(`[SMTP-CONFIG] ETHEREAL_PASS configured: ${hasPass}`);
 
@@ -58,7 +59,11 @@ export async function sendMailViaResendApi({
 }) {
   console.log('[EMAIL-DIAG] PROVIDER REQUEST START (Resend REST API)');
 
-  const formattedFrom = 'ReachInbox Scheduler <onboarding@resend.dev>';
+  const defaultFrom = env.RESEND_FROM_EMAIL || env.DEFAULT_SENDER_EMAIL || 'onboarding@resend.dev';
+  const formattedFrom = defaultFrom.includes('<')
+    ? defaultFrom
+    : `ReachInbox Scheduler <${defaultFrom}>`;
+
   const headers: Record<string, string> = {
     Authorization: `Bearer ${apiKey}`,
     'Content-Type': 'application/json',

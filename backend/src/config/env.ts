@@ -38,6 +38,7 @@ const envSchema = z.object({
   ETHEREAL_USER: optionalString,
   ETHEREAL_PASS: optionalString,
   RESEND_API_KEY: optionalString,
+  RESEND_FROM_EMAIL: optionalString,
   BREVO_API_KEY: optionalString,
   DEFAULT_SENDER_EMAIL: optionalString,
   DEFAULT_SENDER_NAME: optionalString,
