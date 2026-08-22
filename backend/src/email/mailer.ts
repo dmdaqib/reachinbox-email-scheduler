@@ -6,6 +6,7 @@ let cachedTransport: nodemailer.Transporter | null = null;
 export async function getTransport() {
   if (cachedTransport) return cachedTransport;
 
+  console.log('[SMTP] transporter initialization started');
   let user = env.ETHEREAL_USER;
   let pass = env.ETHEREAL_PASS;
   let host = env.ETHEREAL_HOST || 'smtp.ethereal.email';
@@ -25,7 +26,7 @@ export async function getTransport() {
   }
 
   if (!user || !pass) {
-    throw new Error('Ethereal SMTP credentials could not be established. Please set ETHEREAL_USER and ETHEREAL_PASS.');
+    throw new Error('Ethereal SMTP credentials could not be established.');
   }
 
   cachedTransport = nodemailer.createTransport({
@@ -38,7 +39,7 @@ export async function getTransport() {
     },
   });
 
-  console.log(`[SMTP] Transporter initialized for host ${host}:${port}`);
+  console.log('[SMTP] transporter initialized');
   return cachedTransport;
 }
 
@@ -53,8 +54,8 @@ export async function sendMailWithEthereal({
   subject: string;
   text: string;
 }) {
-  console.log(`[SMTP] Dispatching email to ${to} (Subject: "${subject}")`);
   const transport = await getTransport();
+  console.log('[SMTP] sendMail started');
   try {
     const result = (await transport.sendMail({
       from,
@@ -71,9 +72,9 @@ export async function sendMailWithEthereal({
     const finalMessageId = result.messageId || `msg-${Date.now()}`;
     const finalPreview = typeof previewUrl === 'string' ? previewUrl : undefined;
 
-    console.log(`[SMTP] Successfully delivered email to ${to} (MessageId: ${finalMessageId})`);
+    console.log(`[SMTP] sendMail SUCCESS messageId=${finalMessageId}`);
     if (finalPreview) {
-      console.log(`[SMTP] Ethereal Preview URL: ${finalPreview}`);
+      console.log(`[SMTP] previewUrl=${finalPreview}`);
     }
 
     return {
@@ -81,7 +82,7 @@ export async function sendMailWithEthereal({
       previewUrl: finalPreview,
     };
   } catch (error) {
-    console.error(`[SMTP Error] Failed to send email to ${to}:`, error instanceof Error ? error.message : error);
+    console.error(`[SMTP Error] sendMail failed for ${to}:`, error instanceof Error ? (error.stack || error.message) : error);
     cachedTransport = null;
     throw error;
   }
