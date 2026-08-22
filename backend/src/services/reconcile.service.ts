@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { queue } from '../queue/email.queue.js';
+import { processEmailDispatch } from './email.service.js';
 
 export async function reconcileStaleJobs() {
   // 1. Recover stale PROCESSING emails (older than 1 minute)
@@ -22,41 +23,46 @@ export async function reconcileStaleJobs() {
     });
   }
 
-  // 2. Re-enqueue any SCHEDULED emails missing an active/waiting BullMQ job
-  const scheduledEmails = await prisma.email.findMany({
+  // 2. Process any due SCHEDULED emails (scheduledAt <= NOW) immediately
+  const dueEmails = await prisma.email.findMany({
     where: {
       status: 'SCHEDULED',
+      scheduledAt: { lte: new Date() },
+      etherealMessageId: null,
+    },
+    take: 50,
+    orderBy: { scheduledAt: 'asc' },
+  });
+
+  let dispatchedCount = 0;
+  for (const email of dueEmails) {
+    const success = await processEmailDispatch(email.id);
+    if (success) {
+      dispatchedCount += 1;
+    }
+  }
+
+  // 3. Re-enqueue future SCHEDULED emails (scheduledAt > NOW) missing an active BullMQ job
+  const futureScheduledEmails = await prisma.email.findMany({
+    where: {
+      status: 'SCHEDULED',
+      scheduledAt: { gt: new Date() },
       etherealMessageId: null,
     },
   });
 
-  console.log(`[RECONCILE] found ${scheduledEmails.length} scheduled emails`);
-
   let reQueuedCount = 0;
-  for (const email of scheduledEmails) {
-    const isOverdue = new Date(email.scheduledAt).getTime() <= Date.now();
+  for (const email of futureScheduledEmails) {
     const jobId = `email-${email.id}`;
-    const overdueJobId = `email-${email.id}-overdue`;
-    const targetJobId = isOverdue ? overdueJobId : jobId;
-
     const existingJob = await queue.getJob(jobId);
-    const existingOverdueJob = isOverdue ? await queue.getJob(overdueJobId) : null;
+    const state = existingJob ? await existingJob.getState().catch(() => null) : null;
 
-    const mainState = existingJob ? await existingJob.getState().catch(() => null) : null;
-    const overdueState = existingOverdueJob ? await existingOverdueJob.getState().catch(() => null) : null;
-
-    const isAlive = (state: string | null) =>
-      state === 'waiting' || state === 'active' || (state === 'delayed' && !isOverdue);
-
-    if (isAlive(mainState) || isAlive(overdueState)) {
+    if (state === 'delayed' || state === 'waiting' || state === 'active') {
       continue;
     }
 
     if (existingJob) {
       await existingJob.remove().catch(() => {});
-    }
-    if (existingOverdueJob) {
-      await existingOverdueJob.remove().catch(() => {});
     }
 
     const delay = Math.max(0, new Date(email.scheduledAt).getTime() - Date.now());
@@ -64,22 +70,26 @@ export async function reconcileStaleJobs() {
       'email-send',
       { emailId: email.id },
       {
-        jobId: targetJobId,
+        jobId,
         delay,
         removeOnComplete: true,
         removeOnFail: true,
       },
     );
-    console.log(`[QUEUE] enqueued email ID ${email.id}`);
+    console.log(`[QUEUE] enqueued future email ID ${email.id}`);
     reQueuedCount += 1;
   }
 
-  return { reQueuedCount, staleCount: staleProcessing.length, total: scheduledEmails.length };
+  if (dueEmails.length > 0 || reQueuedCount > 0) {
+    console.log(`[RECONCILE] Processed ${dispatchedCount} due emails, re-queued ${reQueuedCount} future jobs.`);
+  }
+
+  return { dispatchedCount, reQueuedCount, staleCount: staleProcessing.length };
 }
 
 let periodicTimer: NodeJS.Timeout | null = null;
 
-export function startPeriodicReconciliation(intervalMs = 30000) {
+export function startPeriodicReconciliation(intervalMs = 5000) {
   if (periodicTimer) return;
   periodicTimer = setInterval(async () => {
     try {
