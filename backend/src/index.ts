@@ -2,6 +2,7 @@ import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { prisma } from './lib/prisma.js';
 import { reconcileStaleJobs } from './services/reconcile.service.js';
+import './worker.js';
 
 const app = createApp();
 
