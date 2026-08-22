@@ -4,7 +4,14 @@ import { processEmailDispatch } from './email.service.js';
 let dispatchRunning = false;
 
 export async function runDispatcherTick() {
-  if (dispatchRunning) return;
+  const timestamp = new Date().toISOString();
+  console.log(`[DISPATCH-LIFECYCLE] timer callback FIRED PID=${process.pid} time=${timestamp}`);
+
+  if (dispatchRunning) {
+    console.log(`[DISPATCH-DEBUG] Tick skipped: previous tick still in progress at ${timestamp}`);
+    return;
+  }
+
   dispatchRunning = true;
 
   try {
@@ -32,15 +39,20 @@ export async function runDispatcherTick() {
       orderBy: { scheduledAt: 'asc' },
     });
 
-    if (dueEmails.length > 0) {
-      console.log(`[DISPATCHER] Found ${dueEmails.length} due scheduled emails in PostgreSQL`);
-    }
+    console.log(`[DISPATCHER] TICK PID=${process.pid} time=${timestamp} found=${dueEmails.length}`);
 
     for (const email of dueEmails) {
-      await processEmailDispatch(email.id);
+      console.log(`[DISPATCH-LIFECYCLE] processEmailDispatch ENTERED email=${email.id}`);
+      try {
+        await processEmailDispatch(email.id);
+        console.log(`[DISPATCH-LIFECYCLE] processEmailDispatch COMPLETED email=${email.id}`);
+      } catch (err: any) {
+        console.error(`[DISPATCH-LIFECYCLE] processEmailDispatch ERROR email=${email.id}:`, err instanceof Error ? err.message : err);
+      }
     }
-  } catch (err) {
-    console.error('[DISPATCHER Error]', err);
+  } catch (err: any) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.error(`[DISPATCH-LIFECYCLE] timer callback ERROR ${errorMsg}`);
   } finally {
     dispatchRunning = false;
   }
@@ -49,10 +61,18 @@ export async function runDispatcherTick() {
 let dispatcherTimer: NodeJS.Timeout | null = null;
 
 export function startDispatcher(intervalMs = 2000) {
-  if (dispatcherTimer) return;
-  console.log('[DISPATCHER] Started 2s PostgreSQL email dispatch loop');
-  runDispatcherTick().catch((err) => console.error('[DISPATCHER Error]', err));
+  console.log(`[DISPATCH-LIFECYCLE] start() ENTERED PID=${process.pid}`);
+  if (dispatcherTimer) {
+    console.log(`[DISPATCH-DEBUG] startDispatcher skipped: timer already registered PID=${process.pid}`);
+    return;
+  }
+
+  console.log(`[DISPATCHER] Started ${intervalMs}ms PostgreSQL email dispatch loop PID=${process.pid}`);
+  runDispatcherTick().catch((err) => console.error('[DISPATCH-LIFECYCLE] initial tick ERROR:', err));
+
   dispatcherTimer = setInterval(() => {
-    runDispatcherTick().catch((err) => console.error('[DISPATCHER Error]', err));
+    runDispatcherTick().catch((err) => console.error('[DISPATCH-LIFECYCLE] interval tick ERROR:', err));
   }, intervalMs);
+
+  console.log(`[DISPATCH-LIFECYCLE] timer registered interval=${intervalMs}ms PID=${process.pid}`);
 }
