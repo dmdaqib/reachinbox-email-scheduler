@@ -15,27 +15,43 @@ export async function runDispatcherTick() {
     console.log(`[DISPATCHER] TICK ${timestamp}`);
     console.log('[DISPATCHER] querying due emails');
 
-    // Stale PROCESSING recovery: Any email in PROCESSING for more than 60 seconds is recovered to FAILED
+    // Recover stale PROCESSING emails (older than 30s) where etherealMessageId IS NULL to SCHEDULED so transient SMTP failures can be retried
     const staleProcessing = await prisma.email.findMany({
       where: {
         status: 'PROCESSING',
         etherealMessageId: null,
-        updatedAt: { lt: new Date(Date.now() - 60 * 1000) },
+        updatedAt: { lt: new Date(Date.now() - 30 * 1000) },
       },
     });
 
     for (const email of staleProcessing) {
-      if (email.status === 'SENT' || email.etherealMessageId) continue;
-      console.log(`[DISPATCH-FAIL] BEFORE FAILED UPDATE email=${email.id}`);
-      await prisma.email.update({
-        where: { id: email.id },
-        data: {
-          status: 'FAILED',
-          failedAt: new Date(),
-          lastError: 'SMTP dispatch timed out or worker became stale after 60 seconds',
-        },
-      });
-      console.log(`[DISPATCH-FAIL] FAILED UPDATE SUCCESS email=${email.id}`);
+      if (email.etherealMessageId) continue;
+      const nextAttempt = (email.attemptCount ?? 0) + 1;
+      const maxAttempts = 3;
+
+      if (nextAttempt >= maxAttempts) {
+        console.log(`[DISPATCH-FAIL] BEFORE FAILED UPDATE email=${email.id}`);
+        await prisma.email.update({
+          where: { id: email.id },
+          data: {
+            status: 'FAILED',
+            failedAt: new Date(),
+            attemptCount: nextAttempt,
+            lastError: `Failed after ${maxAttempts} stale processing attempts`,
+          },
+        });
+        console.log(`[DISPATCH-FAIL] FAILED UPDATE SUCCESS email=${email.id}`);
+      } else {
+        console.log(`[DISPATCH-RECOVERY] Recovering stale PROCESSING email=${email.id} -> SCHEDULED (Attempt ${nextAttempt}/${maxAttempts})`);
+        await prisma.email.update({
+          where: { id: email.id },
+          data: {
+            status: 'SCHEDULED',
+            attemptCount: nextAttempt,
+            lastError: `Recovered after stale PROCESSING state (Attempt ${nextAttempt}/${maxAttempts})`,
+          },
+        });
+      }
     }
 
     const now = new Date();

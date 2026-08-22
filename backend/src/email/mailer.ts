@@ -3,6 +3,22 @@ import { env } from '../config/env.js';
 
 let cachedTransport: nodemailer.Transporter | null = null;
 
+export function clearCachedTransport() {
+  cachedTransport = null;
+}
+
+export async function createTestAccountWithTimeout(timeoutMs = 8000) {
+  console.log('[SMTP-TRACE] createTestAccount START');
+  const accountPromise = nodemailer.createTestAccount();
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error('Ethereal createTestAccount timeout after 8s')), timeoutMs)
+  );
+
+  const account = await Promise.race([accountPromise, timeoutPromise]);
+  console.log('[SMTP-TRACE] createTestAccount SUCCESS');
+  return account;
+}
+
 export async function getTransport() {
   if (cachedTransport) return cachedTransport;
 
@@ -14,14 +30,14 @@ export async function getTransport() {
 
   if (!user || !pass) {
     try {
-      const testAccount = await nodemailer.createTestAccount();
+      const testAccount = await createTestAccountWithTimeout(8000);
       user = testAccount.user;
       pass = testAccount.pass;
       host = testAccount.smtp.host;
       port = testAccount.smtp.port;
       console.log(`[SMTP-TRACE] Auto-generated Ethereal test account: ${user}`);
     } catch (err) {
-      console.warn('[SMTP-TRACE ERROR] Failed to create test account automatically:', err);
+      console.warn('[SMTP-TRACE ERROR] Failed to create test account automatically:', err instanceof Error ? err.message : err);
     }
   }
 
@@ -34,9 +50,9 @@ export async function getTransport() {
     port,
     secure: port === 465,
     auth: { user, pass },
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 15000,
+    connectionTimeout: 8000,
+    greetingTimeout: 8000,
+    socketTimeout: 10000,
     tls: {
       rejectUnauthorized: false,
     },
@@ -60,22 +76,16 @@ export async function sendMailWithEthereal({
   text: string;
 }) {
   const logId = emailId || 'N/A';
-  console.log(`[SMTP-TRACE] START sendMail email=${logId}`);
-  const transport = await getTransport();
 
-  try {
-    const sendPromise = transport.sendMail({
+  const dispatchOperation = async () => {
+    const transport = await getTransport();
+    console.log(`[SMTP-TRACE] START sendMail email=${logId}`);
+    const result = (await transport.sendMail({
       from,
       to,
       subject,
       text,
-    });
-
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('SMTP sendMail 20s timeout exceeded')), 20000),
-    );
-
-    const result = (await Promise.race([sendPromise, timeoutPromise])) as {
+    })) as {
       messageId?: string;
       response?: string;
       accepted?: string[];
@@ -94,12 +104,20 @@ export async function sendMailWithEthereal({
       messageId: finalMessageId,
       previewUrl: finalPreview,
     };
+  };
+
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error(`SMTP operation timed out after 15s for email=${logId}`)), 15000)
+  );
+
+  try {
+    return await Promise.race([dispatchOperation(), timeoutPromise]);
   } catch (error: any) {
     const errorMsg = error instanceof Error ? (error.stack || error.message) : String(error);
-    if (errorMsg.includes('timeout') || errorMsg.includes('TIMEOUT')) {
-      console.error(`[SMTP-TRACE] sendMail TIMEOUT email=${logId}`);
+    if (errorMsg.includes('timed out') || errorMsg.includes('timeout') || errorMsg.includes('TIMEOUT')) {
+      console.error(`[SMTP-TRACE] SMTP TIMEOUT email=${logId}`);
     }
-    console.error(`[SMTP-TRACE] sendMail ERROR email=${logId} error=${errorMsg}`);
+    console.error(`[SMTP-TRACE] SMTP ERROR email=${logId} error=${errorMsg}`);
     cachedTransport = null;
     throw error;
   }
