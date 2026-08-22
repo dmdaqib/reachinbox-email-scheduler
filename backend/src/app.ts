@@ -38,6 +38,10 @@ export function createApp() {
   app.use(passport.initialize());
   app.use(passport.session());
 
+  app.get('/', (_req, res) => {
+    res.json({ ok: true, message: 'ReachInbox Email Scheduler API is running' });
+  });
+
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true, status: 'healthy' });
   });
