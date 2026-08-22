@@ -2,18 +2,22 @@ import { prisma } from '../lib/prisma.js';
 import { sendMailWithEthereal } from '../email/mailer.js';
 
 export async function processEmailDispatch(emailId: string): Promise<boolean> {
-  // Atomic claim to prevent double sending
+  const graceWindow = new Date(Date.now() + 2000);
+
+  // Atomic claim to prevent double sending (with 2s sub-second clock jitter grace window)
   const claimed = await prisma.email.updateMany({
     where: {
       id: emailId,
       status: 'SCHEDULED',
-      scheduledAt: { lte: new Date() },
+      scheduledAt: { lte: graceWindow },
       etherealMessageId: null,
     },
     data: { status: 'PROCESSING' },
   });
 
   if (claimed.count === 0) {
+    const existing = await prisma.email.findUnique({ where: { id: emailId } });
+    console.log(`[DISPATCH] Email ID ${emailId} claim skipped. Current status: ${existing?.status ?? 'NOT_FOUND'}, scheduledAt: ${existing?.scheduledAt?.toISOString() ?? 'N/A'}`);
     return false;
   }
 
@@ -40,7 +44,7 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
       text: email.body,
     });
 
-    await prisma.email.update({
+    const updated = await prisma.email.update({
       where: { id: emailId },
       data: {
         status: 'SENT',
@@ -51,7 +55,8 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
         failedAt: null,
       },
     });
-    console.log(`[DISPATCH] Updated email ID ${emailId} status to SENT in PostgreSQL (MessageId: ${result.messageId})`);
+
+    console.log(`[DISPATCH] Successfully updated email ID ${emailId} status to SENT in PostgreSQL (MessageId: ${updated.etherealMessageId}, Preview: ${updated.previewUrl ?? 'N/A'})`);
     return true;
   } catch (error) {
     const nextAttempt = email.attemptCount + 1;

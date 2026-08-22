@@ -24,11 +24,18 @@ export async function getTransport() {
     }
   }
 
+  if (!user || !pass) {
+    throw new Error('Ethereal SMTP credentials could not be established. Please set ETHEREAL_USER and ETHEREAL_PASS.');
+  }
+
   cachedTransport = nodemailer.createTransport({
     host,
     port,
     secure: port === 465,
-    auth: user && pass ? { user, pass } : undefined,
+    auth: { user, pass },
+    tls: {
+      rejectUnauthorized: false,
+    },
   });
 
   console.log(`[SMTP] Transporter initialized for host ${host}:${port}`);

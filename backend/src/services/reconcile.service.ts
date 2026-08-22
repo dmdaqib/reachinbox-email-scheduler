@@ -3,12 +3,14 @@ import { queue } from '../queue/email.queue.js';
 import { processEmailDispatch } from './email.service.js';
 
 export async function reconcileStaleJobs() {
-  // 1. Recover stale PROCESSING emails (older than 1 minute)
+  const nowWithGrace = new Date(Date.now() + 2000);
+
+  // 1. Recover stale PROCESSING emails (older than 30 seconds)
   const staleProcessing = await prisma.email.findMany({
     where: {
       status: 'PROCESSING',
       etherealMessageId: null,
-      updatedAt: { lt: new Date(Date.now() - 60 * 1000) },
+      updatedAt: { lt: new Date(Date.now() - 30 * 1000) },
     },
   });
 
@@ -23,11 +25,11 @@ export async function reconcileStaleJobs() {
     });
   }
 
-  // 2. Process any due SCHEDULED emails (scheduledAt <= NOW) immediately via DB atomic dispatch
+  // 2. Process any due SCHEDULED emails (scheduledAt <= NOW + 2s) immediately
   const dueEmails = await prisma.email.findMany({
     where: {
       status: 'SCHEDULED',
-      scheduledAt: { lte: new Date() },
+      scheduledAt: { lte: nowWithGrace },
       etherealMessageId: null,
     },
     take: 50,
@@ -46,13 +48,13 @@ export async function reconcileStaleJobs() {
     }
   }
 
-  // 3. Re-enqueue future SCHEDULED emails (scheduledAt > NOW) missing an active BullMQ job
+  // 3. Re-enqueue future SCHEDULED emails (scheduledAt > NOW + 2s) missing an active BullMQ job
   let reQueuedCount = 0;
   try {
     const futureScheduledEmails = await prisma.email.findMany({
       where: {
         status: 'SCHEDULED',
-        scheduledAt: { gt: new Date() },
+        scheduledAt: { gt: nowWithGrace },
         etherealMessageId: null,
       },
     });
@@ -61,7 +63,7 @@ export async function reconcileStaleJobs() {
       const jobId = `email-${email.id}`;
       try {
         const getJobPromise = queue.getJob(jobId);
-        const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000));
+        const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 500));
         const existingJob = await Promise.race([getJobPromise, timeoutPromise]);
         const state = existingJob ? await existingJob.getState().catch(() => null) : null;
 
@@ -91,7 +93,7 @@ export async function reconcileStaleJobs() {
       }
     }
   } catch {
-    // Database or Queue timeout fallback
+    // Timeout fallback
   }
 
   if (dispatchedCount > 0 || reQueuedCount > 0) {
