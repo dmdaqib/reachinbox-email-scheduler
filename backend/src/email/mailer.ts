@@ -38,8 +38,6 @@ export async function getTransport() {
   let host = env.ETHEREAL_HOST || cachedAccount?.host || 'smtp.ethereal.email';
   let port = env.ETHEREAL_PORT || cachedAccount?.port || 587;
 
-  console.log(`[SMTP-TRACE] START transporter initialization (host=${host}:${port}, userConfigured=${Boolean(user)})`);
-
   if (!user || !pass) {
     if (isProd) {
       throw new Error(
@@ -78,12 +76,6 @@ export async function getTransport() {
     },
   });
 
-  console.log(`[SMTP-DIAG] host=${host}`);
-  console.log(`[SMTP-DIAG] port=${port}`);
-  console.log(`[SMTP-DIAG] secure=${port === 465}`);
-  console.log(`[SMTP-DIAG] userConfigured=${Boolean(user)}`);
-  console.log(`[SMTP-DIAG] passConfigured=${Boolean(pass)}`);
-
   console.log('[SMTP-DIAG] transporter.verify START');
   try {
     const transportToVerify = cachedTransport;
@@ -98,14 +90,16 @@ export async function getTransport() {
     console.log('[SMTP-DIAG] transporter.verify SUCCESS');
   } catch (verifyErr: any) {
     const sanitizedMsg = verifyErr instanceof Error ? verifyErr.message : String(verifyErr);
-    const sanitizedStack = verifyErr instanceof Error ? verifyErr.stack : sanitizedMsg;
+    const code = verifyErr?.code || 'N/A';
+    const command = verifyErr?.command || 'N/A';
     console.error('[SMTP-DIAG] transporter.verify FAILED');
-    console.error(`[SMTP-DIAG] error=${sanitizedStack}`);
+    console.error(`[SMTP-DIAG] error=${sanitizedMsg}`);
+    console.error(`[SMTP-DIAG] code=${code}`);
+    console.error(`[SMTP-DIAG] command=${command}`);
     cachedTransport = null;
     throw verifyErr;
   }
 
-  console.log(`[SMTP-TRACE] Transporter ready for host ${host}:${port}`);
   return cachedTransport;
 }
 
@@ -123,8 +117,9 @@ export async function sendMailWithEthereal({
   text: string;
 }) {
   const logId = emailId || 'N/A';
-  console.log(`[SMTP] Dispatching email ID ${logId} to ${to} (Subject: "${subject}")`);
   const transport = await getTransport();
+
+  console.log('[SMTP] sendMail started');
   try {
     const result = (await transport.sendMail({
       from,
@@ -141,7 +136,7 @@ export async function sendMailWithEthereal({
     const finalMessageId = result.messageId || `msg-${Date.now()}`;
     const finalPreview = typeof previewUrl === 'string' ? previewUrl : undefined;
 
-    console.log(`[SMTP-TRACE] sendMail SUCCESS email=${logId} messageId=${finalMessageId}`);
+    console.log(`[SMTP] sendMail SUCCESS messageId=${finalMessageId}`);
     if (finalPreview) {
       console.log(`[SMTP] previewUrl=${finalPreview}`);
     }
@@ -151,7 +146,7 @@ export async function sendMailWithEthereal({
       previewUrl: finalPreview,
     };
   } catch (error) {
-    console.error(`[SMTP Error] Failed to send email ID ${logId} to ${to}:`, error instanceof Error ? error.message : error);
+    console.error(`[SMTP] sendMail ERROR error=${error instanceof Error ? error.message : String(error)}`);
     cachedTransport = null;
     throw error;
   }

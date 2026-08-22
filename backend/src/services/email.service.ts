@@ -37,6 +37,7 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
   }
 
   try {
+    console.log('[DISPATCH-TRACE] BEFORE SMTP');
     const result = await sendMailWithEthereal({
       emailId,
       from: `${sender.displayName} <${sender.email}>`,
@@ -57,6 +58,7 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
       },
     });
 
+    console.log(`[DISPATCH-TRACE] SENT DATABASE UPDATE SUCCESS email=${emailId}`);
     console.log(`[DISPATCH] Successfully updated email ID ${emailId} status to SENT in PostgreSQL (MessageId: ${updated.etherealMessageId}, Preview: ${updated.previewUrl ?? 'N/A'})`);
     return true;
   } catch (error) {

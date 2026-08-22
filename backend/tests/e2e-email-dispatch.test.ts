@@ -16,13 +16,13 @@ describe('End-to-End Ethereal SMTP & Timeout Verification', () => {
     expect(result.messageId).toBeDefined();
     expect(typeof result.messageId).toBe('string');
     expect(result.messageId.length).toBeGreaterThan(0);
-  }, 15000);
+  }, 30000);
 
   it('times out createTestAccountWithTimeout when operation exceeds threshold', async () => {
     const mockTimeoutFunction = async (timeoutMs = 1) => {
       const slowOperation = new Promise((resolve) => setTimeout(resolve, 5000));
       const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Ethereal createTestAccount timeout after 8s')), timeoutMs)
+        setTimeout(() => reject(new Error('Ethereal createTestAccount timeout after 8s')), timeoutMs),
       );
       return Promise.race([slowOperation, timeoutPromise]);
     };
