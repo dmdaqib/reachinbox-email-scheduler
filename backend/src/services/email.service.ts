@@ -6,7 +6,7 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
 
   const now = new Date();
 
-  // Fetch current state for trace logging
+  // Fetch initial status for tracing
   const initialEmail = await prisma.email.findUnique({ where: { id: emailId } });
   if (initialEmail) {
     console.log(`[DISPATCH-TRACE] status=${initialEmail.status} scheduledAt=${initialEmail.scheduledAt.toISOString()}`);
@@ -54,6 +54,7 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
   try {
     console.log(`[DISPATCH-TRACE] BEFORE SMTP email=${emailId}`);
     smtpResult = await sendMailWithEthereal({
+      emailId,
       from: `${sender.displayName} <${sender.email}>`,
       to: email.toEmail,
       subject: email.subject,
@@ -79,7 +80,7 @@ export async function processEmailDispatch(emailId: string): Promise<boolean> {
     return false;
   }
 
-  // SMTP SUCCEEDED! If DB update fails, DO NOT mark as FAILED! Preserve messageId & previewUrl!
+  // SMTP SUCCEEDED! If DB update encounters an issue, DO NOT mark as FAILED! Preserve messageId & previewUrl!
   try {
     console.log(`[DISPATCH-TRACE] BEFORE SENT DATABASE UPDATE email=${emailId}`);
     await prisma.email.update({

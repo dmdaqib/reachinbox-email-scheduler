@@ -15,18 +15,28 @@ export async function runDispatcherTick() {
     console.log(`[DISPATCHER] TICK ${timestamp}`);
     console.log('[DISPATCHER] querying due emails');
 
-    // Immediate recovery: Reset any stale PROCESSING emails (older than 30s) back to SCHEDULED
-    await prisma.email.updateMany({
+    // Stale PROCESSING recovery: Any email in PROCESSING for more than 60 seconds is recovered to FAILED
+    const staleProcessing = await prisma.email.findMany({
       where: {
         status: 'PROCESSING',
         etherealMessageId: null,
-        updatedAt: { lt: new Date(Date.now() - 30 * 1000) },
-      },
-      data: {
-        status: 'SCHEDULED',
-        lastError: 'Recovered after stale PROCESSING state',
+        updatedAt: { lt: new Date(Date.now() - 60 * 1000) },
       },
     });
+
+    for (const email of staleProcessing) {
+      if (email.status === 'SENT' || email.etherealMessageId) continue;
+      console.log(`[DISPATCH-FAIL] BEFORE FAILED UPDATE email=${email.id}`);
+      await prisma.email.update({
+        where: { id: email.id },
+        data: {
+          status: 'FAILED',
+          failedAt: new Date(),
+          lastError: 'SMTP dispatch timed out or worker became stale after 60 seconds',
+        },
+      });
+      console.log(`[DISPATCH-FAIL] FAILED UPDATE SUCCESS email=${email.id}`);
+    }
 
     const now = new Date();
     // Query PostgreSQL for due SCHEDULED emails where scheduledAt <= NOW
