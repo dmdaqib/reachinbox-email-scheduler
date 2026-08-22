@@ -2,57 +2,40 @@ import nodemailer from 'nodemailer';
 import { env } from '../config/env.js';
 
 let cachedTransport: nodemailer.Transporter | null = null;
-let cachedTestAccount: { user: string; pass: string; host: string; port: number } | null = null;
+let cachedAccount: { user: string; pass: string; host: string; port: number } | null = null;
 
 export function clearCachedTransport() {
   cachedTransport = null;
-  cachedTestAccount = null;
-}
-
-export async function createTestAccountWithTimeout(timeoutMs = 8000) {
-  console.log('[SMTP-TRACE] BEFORE ACCOUNT CREATION');
-  const accountPromise = nodemailer.createTestAccount();
-  const timeoutPromise = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error('Ethereal createTestAccount timeout after 8s')), timeoutMs),
-  );
-
-  const account = await Promise.race([accountPromise, timeoutPromise]);
-  console.log('[SMTP-TRACE] CREATE TEST ACCOUNT SUCCESS');
-  return account;
+  cachedAccount = null;
 }
 
 export async function getTransport() {
   if (cachedTransport) return cachedTransport;
 
-  console.log('[SMTP-TRACE] START transporter initialization');
+  let user = env.ETHEREAL_USER || cachedAccount?.user;
+  let pass = env.ETHEREAL_PASS || cachedAccount?.pass;
+  let host = env.ETHEREAL_HOST || cachedAccount?.host || 'smtp.ethereal.email';
+  let port = env.ETHEREAL_PORT || cachedAccount?.port || 587;
 
-  let user = env.ETHEREAL_USER || cachedTestAccount?.user;
-  let pass = env.ETHEREAL_PASS || cachedTestAccount?.pass;
-  let host = env.ETHEREAL_HOST || cachedTestAccount?.host || 'smtp.ethereal.email';
-  let port = env.ETHEREAL_PORT || cachedTestAccount?.port || 587;
-
-  console.log(
-    `[SMTP-TRACE] SMTP CONFIG host=${host} port=${port} secure=${port === 465} userConfigured=${Boolean(
-      env.ETHEREAL_USER,
-    )} passConfigured=${Boolean(env.ETHEREAL_PASS)}`,
-  );
+  console.log(`[SMTP] Initializing transporter (host=${host}:${port}, userConfigured=${Boolean(user)})`);
 
   if (!user || !pass) {
     try {
-      const testAccount = await createTestAccountWithTimeout(8000);
+      console.log('[SMTP] Attempting automatic Ethereal test account generation...');
+      const testAccount = await nodemailer.createTestAccount();
       user = testAccount.user;
       pass = testAccount.pass;
       host = testAccount.smtp.host;
       port = testAccount.smtp.port;
-      cachedTestAccount = { user, pass, host, port };
-    } catch (err: any) {
-      const sanitizedError = err instanceof Error ? err.message : String(err);
-      console.error(`[SMTP-TRACE] CREATE TEST ACCOUNT ERROR error=${sanitizedError}`);
+      cachedAccount = { user, pass, host, port };
+      console.log(`[SMTP] Auto-generated Ethereal test account: ${user}`);
+    } catch (err) {
+      console.warn('[SMTP Error] Failed to create Ethereal test account automatically:', err instanceof Error ? err.message : err);
     }
   }
 
   if (!user || !pass) {
-    throw new Error('Ethereal SMTP credentials could not be established.');
+    throw new Error('Ethereal SMTP credentials could not be established. Please set ETHEREAL_USER and ETHEREAL_PASS environment variables in Render.');
   }
 
   cachedTransport = nodemailer.createTransport({
@@ -68,7 +51,7 @@ export async function getTransport() {
     },
   });
 
-  console.log('[SMTP-TRACE] TRANSPORTER INITIALIZED');
+  console.log(`[SMTP] Transporter ready for host ${host}:${port}`);
   return cachedTransport;
 }
 
@@ -86,10 +69,9 @@ export async function sendMailWithEthereal({
   text: string;
 }) {
   const logId = emailId || 'N/A';
-
-  const dispatchOperation = async () => {
-    const transport = await getTransport();
-    console.log(`[SMTP-TRACE] BEFORE SENDMAIL email=${logId}`);
+  console.log(`[SMTP] Dispatching email ID ${logId} to ${to} (Subject: "${subject}")`);
+  const transport = await getTransport();
+  try {
     const result = (await transport.sendMail({
       from,
       to,
@@ -105,36 +87,17 @@ export async function sendMailWithEthereal({
     const finalMessageId = result.messageId || `msg-${Date.now()}`;
     const finalPreview = typeof previewUrl === 'string' ? previewUrl : undefined;
 
-    console.log(`[SMTP-TRACE] SENDMAIL SUCCESS messageId=${finalMessageId}`);
+    console.log(`[SMTP] Successfully delivered email ID ${logId} to ${to} (MessageId: ${finalMessageId})`);
     if (finalPreview) {
-      console.log(`[SMTP] previewUrl=${finalPreview}`);
+      console.log(`[SMTP] Ethereal Preview URL: ${finalPreview}`);
     }
 
     return {
       messageId: finalMessageId,
       previewUrl: finalPreview,
     };
-  };
-
-  const timeoutPromise = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error(`SMTP operation timed out after 15s for email=${logId}`)), 15000),
-  );
-
-  try {
-    return await Promise.race([dispatchOperation(), timeoutPromise]);
-  } catch (error: any) {
-    const errObj = error instanceof Error ? error : new Error(String(error));
-    const errorMsg = errObj.message || String(error);
-    const errorName = errObj.name || 'Error';
-    const errorCode = (errObj as any).code || 'N/A';
-    const errorStack = errObj.stack || errorMsg;
-
-    if (errorMsg.includes('timed out') || errorMsg.includes('timeout') || errorMsg.includes('TIMEOUT')) {
-      console.error(`[SMTP-TRACE] SMTP TIMEOUT email=${logId}`);
-    }
-    console.error(
-      `[SMTP-TRACE] SENDMAIL ERROR name=${errorName} code=${errorCode} message=${errorMsg} stack=${errorStack}`,
-    );
+  } catch (error) {
+    console.error(`[SMTP Error] Failed to send email ID ${logId} to ${to}:`, error instanceof Error ? error.message : error);
     cachedTransport = null;
     throw error;
   }

@@ -2,114 +2,93 @@ import { prisma } from '../lib/prisma.js';
 import { sendMailWithEthereal } from '../email/mailer.js';
 
 export async function processEmailDispatch(emailId: string): Promise<boolean> {
-  console.log(`[DISPATCH-TRACE] START email=${emailId}`);
+  const graceWindow = new Date(Date.now() + 2000);
 
-  const now = new Date();
-
-  // Fetch initial status for tracing
-  const initialEmail = await prisma.email.findUnique({ where: { id: emailId } });
-  if (initialEmail) {
-    console.log(
-      `[DISPATCH-TRACE] DATABASE READ status=${initialEmail.status} scheduledAt=${initialEmail.scheduledAt.toISOString()} recipient=${initialEmail.toEmail}`,
-    );
-  }
-
-  // Atomic claim mechanism: only process if status is SCHEDULED and scheduledAt <= NOW
+  // Atomic claim to prevent double sending (with 2s sub-second clock jitter grace window)
   const claimed = await prisma.email.updateMany({
     where: {
       id: emailId,
       status: 'SCHEDULED',
-      scheduledAt: { lte: now },
+      scheduledAt: { lte: graceWindow },
       etherealMessageId: null,
     },
     data: { status: 'PROCESSING' },
   });
 
-  console.log(`[DISPATCH-TRACE] CLAIM RESULT count=${claimed.count}`);
-
   if (claimed.count === 0) {
+    const existing = await prisma.email.findUnique({ where: { id: emailId } });
+    console.log(`[DISPATCH] Email ID ${emailId} claim skipped. Current status: ${existing?.status ?? 'NOT_FOUND'}, scheduledAt: ${existing?.scheduledAt?.toISOString() ?? 'N/A'}`);
     return false;
   }
+
+  console.log(`[DISPATCH] Claimed email ID ${emailId} for dispatch processing`);
 
   const email = await prisma.email.findUnique({ where: { id: emailId } });
   if (!email) return false;
 
   const sender = await prisma.sender.findUnique({ where: { id: email.senderId } });
   if (!sender) {
-    const error = new Error('Sender not found');
-    console.error(`[DISPATCH-TRACE] FINAL FAILURE email=${emailId} stage=SENDER_LOOKUP error=${error.message}`);
     await prisma.email.update({
       where: { id: emailId },
-      data: { status: 'FAILED', failedAt: new Date(), lastError: error.message },
+      data: { status: 'FAILED', failedAt: new Date(), lastError: 'Sender not found' },
     });
+    console.error(`[DISPATCH Error] Failed email ID ${emailId}: Sender not found`);
     return false;
   }
 
-  let smtpResult: { messageId: string; previewUrl?: string } | null = null;
-
   try {
-    console.log('[DISPATCH-TRACE] BEFORE SMTP');
-    smtpResult = await sendMailWithEthereal({
+    const result = await sendMailWithEthereal({
       emailId,
       from: `${sender.displayName} <${sender.email}>`,
       to: email.toEmail,
       subject: email.subject,
       text: email.body,
     });
-  } catch (error: any) {
-    const errObj = error instanceof Error ? error : new Error(String(error));
-    const errorMsg = errObj.stack || errObj.message;
-    console.error(`[DISPATCH-TRACE] FINAL FAILURE email=${emailId} stage=SMTP_DISPATCH error=${errorMsg}`);
 
-    await prisma.email.update({
-      where: { id: emailId },
-      data: {
-        status: 'FAILED',
-        failedAt: new Date(),
-        lastError: errorMsg,
-      },
-    });
-    return false;
-  }
-
-  // SMTP SUCCEEDED! If DB update encounters an issue, DO NOT mark as FAILED! Preserve messageId & previewUrl!
-  try {
-    console.log('[DISPATCH-TRACE] BEFORE SENT DATABASE UPDATE');
-    await prisma.email.update({
+    const updated = await prisma.email.update({
       where: { id: emailId },
       data: {
         status: 'SENT',
         sentAt: new Date(),
-        etherealMessageId: smtpResult.messageId,
-        previewUrl: smtpResult.previewUrl ?? null,
+        etherealMessageId: result.messageId,
+        previewUrl: result.previewUrl ?? null,
         lastError: null,
         failedAt: null,
       },
     });
-    console.log('[DISPATCH-TRACE] SENT DATABASE UPDATE SUCCESS');
-    console.log(`[DISPATCH-TRACE] COMPLETE email=${emailId}`);
-    return true;
-  } catch (dbError: any) {
-    const dbErrObj = dbError instanceof Error ? dbError : new Error(String(dbError));
-    console.error(`[DISPATCH-TRACE] SENT DATABASE UPDATE ERROR error=${dbErrObj.message}`);
 
-    try {
+    console.log(`[DISPATCH] Successfully updated email ID ${emailId} status to SENT in PostgreSQL (MessageId: ${updated.etherealMessageId}, Preview: ${updated.previewUrl ?? 'N/A'})`);
+    return true;
+  } catch (error) {
+    const nextAttempt = (email.attemptCount ?? 0) + 1;
+    const maxAttempts = 3;
+    const errorMsg = error instanceof Error ? error.message : String(error);
+
+    if (nextAttempt >= maxAttempts) {
       await prisma.email.update({
         where: { id: emailId },
         data: {
-          status: 'SENT',
-          sentAt: new Date(),
-          etherealMessageId: smtpResult.messageId,
-          previewUrl: smtpResult.previewUrl ?? null,
-          lastError: `SMTP succeeded (messageId=${smtpResult.messageId}), but DB update notice: ${dbErrObj.message}`,
+          status: 'FAILED',
+          failedAt: new Date(),
+          attemptCount: nextAttempt,
+          lastError: errorMsg,
         },
       });
-      console.log('[DISPATCH-TRACE] SENT DATABASE UPDATE SUCCESS (fallback)');
-      console.log(`[DISPATCH-TRACE] COMPLETE email=${emailId}`);
-      return true;
-    } catch (fallbackErr: any) {
-      console.error(`[DISPATCH-TRACE] FINAL FAILURE email=${emailId} stage=SENT_DB_UPDATE error=${dbErrObj.message}`);
-      return false;
+      console.error(`[DISPATCH Error] Failed email ID ${emailId} after ${maxAttempts} attempts: ${errorMsg}`);
+    } else {
+      const retryDelayMs = Math.min(1000 * Math.pow(2, nextAttempt), 30000);
+      const retryScheduledAt = new Date(Date.now() + retryDelayMs);
+      await prisma.email.update({
+        where: { id: emailId },
+        data: {
+          status: 'SCHEDULED',
+          scheduledAt: retryScheduledAt,
+          attemptCount: nextAttempt,
+          lastError: `Retry ${nextAttempt}/${maxAttempts}: ${errorMsg}`,
+        },
+      });
+      console.log(`[DISPATCH] Rescheduled email ID ${emailId} for retry ${nextAttempt}/${maxAttempts} in ${retryDelayMs}ms`);
     }
+    return false;
   }
 }
