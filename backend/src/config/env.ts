@@ -32,6 +32,7 @@ const envSchema = z.object({
   MAX_EMAILS_PER_HOUR: z.coerce.number().int().min(1).default(100),
   GOOGLE_CLIENT_ID: optionalString,
   GOOGLE_CLIENT_SECRET: optionalString,
+  EMAIL_PROVIDER: z.string().default('ethereal').transform((val) => val.trim().toLowerCase()),
   ETHEREAL_HOST: optionalString,
   ETHEREAL_PORT: z.coerce.number().int().min(1).default(587),
   ETHEREAL_USER: optionalString,

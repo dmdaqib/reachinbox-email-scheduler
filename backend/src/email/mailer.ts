@@ -15,8 +15,10 @@ export function printSmtpStartupConfig() {
   const hasResend = Boolean(env.RESEND_API_KEY && env.RESEND_API_KEY.trim());
   const host = env.ETHEREAL_HOST || 'smtp.ethereal.email';
   const port = env.ETHEREAL_PORT || 587;
+  const provider = env.EMAIL_PROVIDER || 'ethereal';
 
   console.log(`[SMTP-CONFIG] Environment: ${env.NODE_ENV}`);
+  console.log(`[SMTP-CONFIG] EMAIL_PROVIDER: ${provider}`);
   console.log(`[SMTP-CONFIG] RESEND_API_KEY configured: ${hasResend}`);
   console.log(`[SMTP-CONFIG] ETHEREAL_USER configured: ${hasUser}`);
   console.log(`[SMTP-CONFIG] ETHEREAL_PASS configured: ${hasPass}`);
@@ -39,7 +41,6 @@ export async function sendMailViaHttpApi({
 }) {
   console.log('[EMAIL-DIAG] PROVIDER REQUEST START (Resend HTTPS API over Port 443)');
 
-  // Format sender address cleanly for Resend
   const formattedFrom = from.includes('<')
     ? from
     : `ReachInbox Scheduler <onboarding@resend.dev>`;
@@ -96,11 +97,8 @@ export async function getTransport() {
 
   if (!user || !pass) {
     if (isProd) {
-      console.warn(
-        '[CONFIG WARNING] Render Free Web Services block outbound SMTP ports 25, 465, and 587. To send emails from Render production over port 443, configure RESEND_API_KEY in Render Environment Variables.',
-      );
       throw new Error(
-        'Ethereal SMTP credentials could not be established. Please set RESEND_API_KEY (for HTTPS port 443 dispatch) or ETHEREAL_USER and ETHEREAL_PASS in Render Environment Variables.',
+        'Ethereal SMTP credentials could not be established. Please set ETHEREAL_USER and ETHEREAL_PASS environment variables in Render.',
       );
     }
 
@@ -176,9 +174,10 @@ export async function sendMailWithEthereal({
   text: string;
 }) {
   const logId = emailId || 'N/A';
+  const provider = (env.EMAIL_PROVIDER || 'ethereal').toLowerCase();
 
-  // If RESEND_API_KEY is configured, send via Resend HTTPS API over Port 443
-  if (env.RESEND_API_KEY && env.RESEND_API_KEY.trim()) {
+  // If EMAIL_PROVIDER is explicitly set to 'resend' AND RESEND_API_KEY is present, use Resend
+  if (provider === 'resend' && env.RESEND_API_KEY && env.RESEND_API_KEY.trim()) {
     return sendMailViaHttpApi({
       apiKey: env.RESEND_API_KEY.trim(),
       from,
@@ -188,10 +187,10 @@ export async function sendMailWithEthereal({
     });
   }
 
-  // Otherwise, use Nodemailer SMTP
+  // Default provider: Ethereal SMTP
+  console.log(`[EMAIL-DIAG] PROVIDER REQUEST START (Ethereal SMTP for email=${logId})`);
   const transport = await getTransport();
 
-  console.log('[SMTP] sendMail started');
   try {
     const result = (await transport.sendMail({
       from,
@@ -208,7 +207,7 @@ export async function sendMailWithEthereal({
     const finalMessageId = result.messageId || `msg-${Date.now()}`;
     const finalPreview = typeof previewUrl === 'string' ? previewUrl : undefined;
 
-    console.log(`[SMTP] sendMail SUCCESS messageId=${finalMessageId}`);
+    console.log(`[EMAIL-DIAG] PROVIDER SUCCESS messageId=${finalMessageId}`);
     if (finalPreview) {
       console.log(`[SMTP] previewUrl=${finalPreview}`);
     }
@@ -218,7 +217,8 @@ export async function sendMailWithEthereal({
       previewUrl: finalPreview,
     };
   } catch (error) {
-    console.error(`[SMTP] sendMail ERROR error=${error instanceof Error ? error.message : String(error)}`);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error(`[EMAIL-DIAG] PROVIDER ERROR error=${errorMsg}`);
     cachedTransport = null;
     throw error;
   }
