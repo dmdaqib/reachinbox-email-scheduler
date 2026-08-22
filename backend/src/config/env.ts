@@ -40,6 +40,7 @@ const envSchema = z.object({
   RESEND_API_KEY: optionalString,
   RESEND_FROM_EMAIL: optionalString,
   BREVO_API_KEY: optionalString,
+  BREVO_FROM_EMAIL: optionalString,
   DEFAULT_SENDER_EMAIL: optionalString,
   DEFAULT_SENDER_NAME: optionalString,
 });
