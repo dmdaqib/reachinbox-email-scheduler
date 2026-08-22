@@ -58,10 +58,9 @@ export function createApp() {
       saveUninitialized: false,
       proxy: isProd,
       cookie: {
-        maxAge: 1000 * 60 * 60 * 24 * 7,
-        httpOnly: true,
         secure: isProd,
         sameSite: isProd ? 'none' : 'lax',
+        maxAge: 24 * 60 * 60 * 1000,
       },
     }),
   );
@@ -69,14 +68,12 @@ export function createApp() {
   app.use(passport.initialize());
   app.use(passport.session());
 
-  app.get('/', (_req, res) => {
-    res.json({ ok: true, message: 'ReachInbox Email Scheduler API is running' });
-  });
-
-  app.get('/api/health', (_req, res) => {
+  // Health check
+  app.get('/health', (_req, res) => {
     res.json({ ok: true, status: 'healthy' });
   });
 
+  // Google OAuth Auth Routes
   app.get('/api/auth/google', (req, res, next) => {
     if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
       return res.status(500).json({
@@ -89,7 +86,17 @@ export function createApp() {
 
   app.get(
     '/api/auth/google/callback',
-    passport.authenticate('google', { failureRedirect: `${env.FRONTEND_URL.replace(/\/$/, '')}/login?error=google` }),
+    (req, res, next) => {
+      const fallbackFrontend = isProd
+        ? 'https://reachinbox-email-scheduler-1-fl9q.onrender.com'
+        : 'http://localhost:5173';
+      const baseFrontend = env.FRONTEND_URL && !env.FRONTEND_URL.includes('localhost')
+        ? env.FRONTEND_URL
+        : (isProd ? fallbackFrontend : env.FRONTEND_URL);
+      const redirectBase = baseFrontend.replace(/\/$/, '');
+
+      passport.authenticate('google', { failureRedirect: `${redirectBase}/login?error=google` })(req, res, next);
+    },
     (req, res) => {
       req.session.save((err) => {
         if (err) {
@@ -97,10 +104,20 @@ export function createApp() {
         }
         const user = req.user as { id?: string } | undefined;
         const token = user?.id ? generateAuthToken(user.id) : '';
-        const frontendUrl = env.FRONTEND_URL.replace(/\/$/, '');
+
+        const fallbackFrontend = isProd
+          ? 'https://reachinbox-email-scheduler-1-fl9q.onrender.com'
+          : 'http://localhost:5173';
+        const baseFrontend = env.FRONTEND_URL && !env.FRONTEND_URL.includes('localhost')
+          ? env.FRONTEND_URL
+          : (isProd ? fallbackFrontend : env.FRONTEND_URL);
+        const frontendUrl = baseFrontend.replace(/\/$/, '');
+
         const targetUrl = token
           ? `${frontendUrl}/dashboard?token=${encodeURIComponent(token)}`
           : `${frontendUrl}/dashboard`;
+
+        console.log(`[OAuth Redirect] Redirecting user ${user?.id ?? 'unknown'} to: ${targetUrl}`);
         res.redirect(targetUrl);
       });
     },
@@ -118,137 +135,104 @@ export function createApp() {
     res.json(currentUser);
   });
 
-  app.post('/api/auth/logout', requireAuth, (req, res) => {
-    req.logout?.(() => {
-      req.session?.destroy(() => {
-        res.clearCookie('connect.sid');
+  app.post('/api/auth/logout', (req, res) => {
+    req.logout(() => {
+      req.session.destroy(() => {
         res.json({ ok: true });
       });
     });
   });
 
-  app.get('/api/senders', requireAuth, async (req, res) => {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
-
-    const senders = await getUserSenders(userId);
-    res.json(senders);
+  // Sender Profiles API
+  app.get('/api/senders', requireAuth, async (req, res, next) => {
+    try {
+      const senders = await getUserSenders(req.user!.id);
+      res.json(senders);
+    } catch (err) {
+      next(err);
+    }
   });
 
-  app.post('/api/senders', requireAuth, async (req, res) => {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
-
-    const sender = await createSenderForUser(userId, {
-      email: req.body.email,
-      displayName: req.body.displayName,
-      smtpHost: req.body.smtpHost || 'smtp.ethereal.email',
-      smtpPort: Number(req.body.smtpPort || 587),
-      smtpUser: req.body.smtpUser || req.body.email,
-      smtpPass: req.body.smtpPass || 'change-me',
-      hourlyLimit: Number(req.body.hourlyLimit || undefined),
-      isDefault: false,
-    });
-
-    res.status(201).json(sender);
+  app.post('/api/senders', requireAuth, async (req, res, next) => {
+    try {
+      const senderSchema = z.object({
+        email: z.string().email(),
+        displayName: z.string().min(1),
+        smtpHost: z.string().optional(),
+        smtpPort: z.number().optional(),
+        smtpUser: z.string().optional(),
+        smtpPass: z.string().optional(),
+        isDefault: z.boolean().optional(),
+        hourlyLimit: z.number().optional(),
+      });
+      const data = senderSchema.parse(req.body);
+      const sender = await createSenderForUser(req.user!.id, data);
+      res.json(sender);
+    } catch (err) {
+      next(err);
+    }
   });
 
+  // Scheduling API (POST /api/emails/schedule)
   app.post('/api/emails/schedule', requireAuth, upload.single('file'), async (req, res, next) => {
     try {
-      const userId = req.user?.id;
-      if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+      const fileContent = req.file ? req.file.buffer.toString('utf-8') : undefined;
+      const recipientsRaw = req.body.recipients ? JSON.parse(req.body.recipients) : [];
 
-      const schema = z.object({
-        subject: z.string().trim().min(1),
-        body: z.string().min(1),
-        startAt: z.string().min(1),
-        delayMs: z.coerce.number().int().min(0).optional(),
-        hourlyLimit: z.coerce.number().int().min(1).optional(),
-        senderId: z.string().optional(),
-        recipients: z.string().optional(),
+      const result = await scheduleEmailsForUser(req.user!.id, {
+        subject: req.body.subject,
+        body: req.body.body,
+        startAt: req.body.startAt,
+        delayMs: req.body.delayMs ? Number(req.body.delayMs) : undefined,
+        hourlyLimit: req.body.hourlyLimit ? Number(req.body.hourlyLimit) : undefined,
+        senderId: req.body.senderId,
+        recipients: recipientsRaw,
+        fileContent,
       });
 
-      const parseBody = schema.safeParse(req.body);
-      if (!parseBody.success) {
-        return res.status(400).json({ message: 'Invalid scheduling payload', errors: parseBody.error.flatten() });
-      }
-
-      let jsonRecipients: string[] = [];
-      if (parseBody.data.recipients) {
-        try {
-          const parsed = JSON.parse(parseBody.data.recipients);
-          jsonRecipients = Array.isArray(parsed) ? parsed : [String(parsed)];
-        } catch {
-          jsonRecipients = parseBody.data.recipients.split(/[,;\n]/).map((v) => v.trim()).filter(Boolean);
-        }
-      }
-
-      const fileText = req.file?.buffer ? req.file.buffer.toString('utf-8') : '';
-      const recipientList = parseRecipientList({
-        recipients: jsonRecipients,
-        fileContent: fileText,
-      });
-
-      if (recipientList.length === 0) {
-        return res.status(400).json({ message: 'No valid recipient email addresses were found in request' });
-      }
-
-      const result = await scheduleEmailsForUser(userId, {
-        subject: parseBody.data.subject,
-        body: parseBody.data.body,
-        startAt: parseBody.data.startAt,
-        delayMs: parseBody.data.delayMs,
-        hourlyLimit: parseBody.data.hourlyLimit,
-        senderId: parseBody.data.senderId,
-        recipients: recipientList.map((r) => r.email),
-        fileContent: fileText,
-      });
-
-      return res.json(result);
-    } catch (error) {
-      next(error);
+      res.status(200).json(result);
+    } catch (err) {
+      next(err);
     }
   });
 
-  app.get('/api/emails/scheduled', requireAuth, async (req, res) => {
-    const page = Number(req.query.page ?? 1);
-    const limit = Number(req.query.limit ?? 20);
-    const emails = await prisma.email.findMany({
-      where: { userId: req.user?.id, status: { in: ['SCHEDULED', 'PROCESSING'] } },
-      orderBy: { scheduledAt: 'asc' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
-    res.json(emails);
-  });
-
-  app.get('/api/emails/sent', requireAuth, async (req, res) => {
-    const emails = await prisma.email.findMany({
-      where: { userId: req.user?.id, status: { in: ['SENT', 'FAILED'] } },
-      orderBy: { sentAt: 'desc' },
-    });
-    res.json(emails);
-  });
-
+  // Cancel Scheduled Email API
   app.post('/api/emails/:id/cancel', requireAuth, async (req, res, next) => {
     try {
-      const userId = req.user?.id;
-      if (!userId) return res.status(401).json({ message: 'Unauthorized' });
-
-      const result = await cancelScheduledEmail(userId, req.params.id);
+      const emailId = req.params.id;
+      const result = await cancelScheduledEmail(req.user!.id, emailId);
       res.json(result);
-    } catch (error) {
-      next(error);
+    } catch (err) {
+      next(err);
     }
   });
 
-  app.get('/api/emails/:id', requireAuth, async (req, res) => {
-    const email = await prisma.email.findFirst({
-      where: { id: req.params.id, userId: req.user?.id },
-    });
+  // Listing Scheduled Emails API
+  app.get('/api/emails/scheduled', requireAuth, async (req, res, next) => {
+    try {
+      const scheduled = await prisma.email.findMany({
+        where: { userId: req.user?.id, status: { in: ['SCHEDULED', 'PROCESSING'] } },
+        orderBy: { scheduledAt: 'asc' },
+        include: { sender: { select: { displayName: true, email: true } } },
+      });
+      res.json(scheduled);
+    } catch (err) {
+      next(err);
+    }
+  });
 
-    if (!email) return res.status(404).json({ message: 'Email not found' });
-    res.json(email);
+  // Listing Sent Emails API
+  app.get('/api/emails/sent', requireAuth, async (req, res, next) => {
+    try {
+      const sent = await prisma.email.findMany({
+        where: { userId: req.user?.id, status: { in: ['SENT', 'FAILED'] } },
+        orderBy: { updatedAt: 'desc' },
+        include: { sender: { select: { displayName: true, email: true } } },
+      });
+      res.json(sent);
+    } catch (err) {
+      next(err);
+    }
   });
 
   app.use(notFoundHandler);
