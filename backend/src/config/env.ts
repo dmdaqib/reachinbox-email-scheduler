@@ -36,6 +36,7 @@ const envSchema = z.object({
   ETHEREAL_PORT: z.coerce.number().int().min(1).default(587),
   ETHEREAL_USER: optionalString,
   ETHEREAL_PASS: optionalString,
+  RESEND_API_KEY: optionalString,
   DEFAULT_SENDER_EMAIL: optionalString,
   DEFAULT_SENDER_NAME: optionalString,
 });
