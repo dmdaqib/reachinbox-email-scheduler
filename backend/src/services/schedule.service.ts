@@ -78,21 +78,21 @@ export async function scheduleEmailsForUser(userId: string, input: ScheduleReque
     } satisfies Prisma.EmailCreateManyInput;
   });
 
-  const created = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    await tx.email.createMany({ data: preparedRows });
+  await prisma.email.createMany({ data: preparedRows });
 
-    const records = (await tx.email.findMany({
-      where: { id: { in: preparedRows.map((row) => row.id) } },
-      orderBy: { createdAt: 'asc' },
-    })) as Array<{
-      id: string;
-      toEmail: string;
-      scheduledAt: Date;
-      status: string;
-    }>;
+  const records = (await prisma.email.findMany({
+    where: { id: { in: preparedRows.map((row) => row.id) } },
+    orderBy: { createdAt: 'asc' },
+  })) as Array<{
+    id: string;
+    toEmail: string;
+    scheduledAt: Date;
+    status: string;
+  }>;
 
-    for (const row of records) {
-      await queue.add(
+  for (const row of records) {
+    try {
+      const enqueuePromise = queue.add(
         'email-send',
         { emailId: row.id },
         {
@@ -102,15 +102,22 @@ export async function scheduleEmailsForUser(userId: string, input: ScheduleReque
           removeOnFail: true,
         },
       );
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Queue add timeout')), 1500),
+      );
+      await Promise.race([enqueuePromise, timeoutPromise]);
+    } catch (queueErr) {
+      console.warn(
+        `[Schedule Queue Warning] Could not enqueue BullMQ job for email ${row.id}:`,
+        queueErr instanceof Error ? queueErr.message : queueErr,
+      );
     }
-
-    return records;
-  });
+  }
 
   return {
-    acceptedCount: created.length,
-    rejectedCount: Math.max(recipients.length - created.length, 0),
-    emails: created.map((email: { id: string; toEmail: string; scheduledAt: Date; status: string }) => ({
+    acceptedCount: records.length,
+    rejectedCount: Math.max(recipients.length - records.length, 0),
+    emails: records.map((email) => ({
       id: email.id,
       toEmail: email.toEmail,
       scheduledAt: email.scheduledAt,
