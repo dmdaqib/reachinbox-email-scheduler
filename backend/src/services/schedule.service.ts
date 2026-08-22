@@ -141,6 +141,7 @@ export async function cancelScheduledEmail(userId: string, emailId: string) {
     throw new Error(`Cannot cancel email with status '${email.status}'`);
   }
 
+  console.log(`[DISPATCH-FAIL] ABOUT TO MARK FAILED email=${emailId} error=Cancelled by user`);
   await prisma.email.updateMany({
     where: { id: emailId, userId, status: EmailStatus.SCHEDULED },
     data: {
@@ -149,6 +150,7 @@ export async function cancelScheduledEmail(userId: string, emailId: string) {
       lastError: 'Cancelled by user',
     },
   });
+  console.log(`[DISPATCH-FAIL] MARKED FAILED email=${emailId}`);
 
   return { success: true, emailId };
 }
