@@ -6,12 +6,17 @@ import { sendMailWithEthereal } from './email/mailer.js';
 import { checkMinDelayGap, reserveHourlySlot } from './queue/rateLimit.js';
 import { nextHourUTC } from './services/slotPlanner.js';
 import { queue } from './queue/email.queue.js';
+import { reconcileStaleJobs, startPeriodicReconciliation } from './services/reconcile.service.js';
+
+console.log('[WORKER] started');
 
 const worker = new Worker(
   'email-send',
   async (job) => {
     const emailId = String(job.data.emailId || '');
     if (!emailId) return;
+
+    console.log(`[WORKER] processing email ID ${emailId}`);
 
     const email = await prisma.email.findUnique({ where: { id: emailId } });
     if (!email) return;
@@ -55,6 +60,7 @@ const worker = new Worker(
         where: { id: emailId },
         data: { status: 'FAILED', failedAt: new Date(), lastError: 'Sender not found' },
       });
+      console.error(`[WORKER] failed email ID ${emailId}: Sender not found`);
       return;
     }
 
@@ -128,6 +134,7 @@ const worker = new Worker(
           failedAt: null,
         },
       });
+      console.log(`[WORKER] sent email ID ${emailId}`);
     } catch (error) {
       const nextAttempt = email.attemptCount + 1;
       const maxAttempts = 3;
@@ -142,6 +149,7 @@ const worker = new Worker(
             lastError: error instanceof Error ? error.message : 'Unknown error',
           },
         });
+        console.error(`[WORKER] failed email ID ${emailId}: ${error instanceof Error ? error.message : error}`);
       } else {
         const retryDelayMs = Math.min(1000 * Math.pow(2, nextAttempt), 30000);
         const retryScheduledAt = new Date(Date.now() + retryDelayMs);
@@ -178,15 +186,12 @@ const worker = new Worker(
 );
 
 worker.on('completed', (job) => {
-  console.log('Job completed', job.name, job.id);
+  console.log(`[WORKER] completed job ${job.name} (ID: ${job.id})`);
 });
 
 worker.on('failed', (job, error) => {
-  console.error('Worker job failed', job?.name, job?.id, error.message);
+  console.error(`[WORKER] failed job ${job?.name} (ID: ${job?.id}): ${error.message}`);
 });
 
-import { reconcileStaleJobs } from './services/reconcile.service.js';
-
-console.log('Email worker started');
-reconcileStaleJobs().catch((err) => console.error('Worker reconciliation error:', err));
-
+reconcileStaleJobs().catch((err) => console.error('[RECONCILE Error] Startup reconciliation failed:', err));
+startPeriodicReconciliation(30000);

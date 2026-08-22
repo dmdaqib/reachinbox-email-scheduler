@@ -78,6 +78,7 @@ export async function scheduleEmailsForUser(userId: string, input: ScheduleReque
     } satisfies Prisma.EmailCreateManyInput;
   });
 
+  // 1. Save scheduled email records to PostgreSQL
   await prisma.email.createMany({ data: preparedRows });
 
   const records = (await prisma.email.findMany({
@@ -90,28 +91,28 @@ export async function scheduleEmailsForUser(userId: string, input: ScheduleReque
     status: string;
   }>;
 
-  for (const row of records) {
-    try {
-      const enqueuePromise = queue.add(
+  // 2. Enqueue each job to Redis/BullMQ. If Redis is unavailable, delete database records and fail scheduling.
+  try {
+    for (const row of records) {
+      const delay = Math.max(0, new Date(row.scheduledAt).getTime() - Date.now());
+      await queue.add(
         'email-send',
         { emailId: row.id },
         {
           jobId: `email-${row.id}`,
-          delay: Math.max(0, new Date(row.scheduledAt).getTime() - Date.now()),
+          delay,
           removeOnComplete: true,
           removeOnFail: true,
         },
       );
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Queue add timeout')), 1500),
-      );
-      await Promise.race([enqueuePromise, timeoutPromise]);
-    } catch (queueErr) {
-      console.warn(
-        `[Schedule Queue Warning] Could not enqueue BullMQ job for email ${row.id}:`,
-        queueErr instanceof Error ? queueErr.message : queueErr,
-      );
+      console.log(`[QUEUE] enqueued email ID ${row.id}`);
     }
+  } catch (queueError) {
+    console.error('[QUEUE Error] Failed to enqueue job to BullMQ queue:', queueError);
+    await prisma.email.deleteMany({
+      where: { id: { in: records.map((r) => r.id) } },
+    });
+    throw new Error('Failed to enqueue job to Redis queue. Please check Redis connection.');
   }
 
   return {
@@ -185,4 +186,3 @@ export async function cancelScheduledEmail(userId: string, emailId: string) {
 
   return { success: true, emailId };
 }
-

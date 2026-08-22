@@ -67,3 +67,8 @@ export const redis: any = useMemoryRedis
       enableReadyCheck: false,
     });
 
+if (!useMemoryRedis) {
+  redis.on('connect', () => console.log('[WORKER] connected to Redis'));
+  redis.on('ready', () => console.log('[WORKER] Redis connection is ready'));
+  redis.on('error', (err: any) => console.error('[REDIS Error]', err.message));
+}

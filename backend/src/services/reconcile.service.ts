@@ -2,8 +2,6 @@ import { prisma } from '../lib/prisma.js';
 import { queue } from '../queue/email.queue.js';
 
 export async function reconcileStaleJobs() {
-  console.log('[Reconcile] Running startup job reconciliation...');
-
   // 1. Recover stale PROCESSING emails (older than 1 minute)
   const staleProcessing = await prisma.email.findMany({
     where: {
@@ -32,6 +30,8 @@ export async function reconcileStaleJobs() {
     },
   });
 
+  console.log(`[RECONCILE] found ${scheduledEmails.length} scheduled emails`);
+
   let reQueuedCount = 0;
   for (const email of scheduledEmails) {
     const isOverdue = new Date(email.scheduledAt).getTime() <= Date.now();
@@ -45,7 +45,8 @@ export async function reconcileStaleJobs() {
     const mainState = existingJob ? await existingJob.getState().catch(() => null) : null;
     const overdueState = existingOverdueJob ? await existingOverdueJob.getState().catch(() => null) : null;
 
-    const isAlive = (state: string | null) => state === 'waiting' || state === 'active' || (state === 'delayed' && !isOverdue);
+    const isAlive = (state: string | null) =>
+      state === 'waiting' || state === 'active' || (state === 'delayed' && !isOverdue);
 
     if (isAlive(mainState) || isAlive(overdueState)) {
       continue;
@@ -69,10 +70,22 @@ export async function reconcileStaleJobs() {
         removeOnFail: true,
       },
     );
+    console.log(`[QUEUE] enqueued email ID ${email.id}`);
     reQueuedCount += 1;
   }
 
-  console.log(`[Reconcile] Completed. Restored ${reQueuedCount} missing BullMQ delayed jobs.`);
-  return { reQueuedCount, staleCount: staleProcessing.length };
+  return { reQueuedCount, staleCount: staleProcessing.length, total: scheduledEmails.length };
 }
 
+let periodicTimer: NodeJS.Timeout | null = null;
+
+export function startPeriodicReconciliation(intervalMs = 30000) {
+  if (periodicTimer) return;
+  periodicTimer = setInterval(async () => {
+    try {
+      await reconcileStaleJobs();
+    } catch (err) {
+      console.error('[RECONCILE Error] Periodic reconciliation error:', err);
+    }
+  }, intervalMs);
+}
