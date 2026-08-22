@@ -14,6 +14,7 @@ export function printSmtpStartupConfig() {
   const hasUser = Boolean(env.ETHEREAL_USER && env.ETHEREAL_USER.trim());
   const hasPass = Boolean(env.ETHEREAL_PASS && env.ETHEREAL_PASS.trim());
   const hasResend = Boolean(env.RESEND_API_KEY && env.RESEND_API_KEY.trim());
+  const hasBrevo = Boolean(env.BREVO_API_KEY && env.BREVO_API_KEY.trim());
   const host = env.ETHEREAL_HOST || 'smtp.ethereal.email';
   const port = env.ETHEREAL_PORT || 587;
   const provider = env.EMAIL_PROVIDER || 'ethereal';
@@ -21,6 +22,7 @@ export function printSmtpStartupConfig() {
   console.log(`[SMTP-CONFIG] Environment: ${env.NODE_ENV}`);
   console.log(`[SMTP-CONFIG] EMAIL_PROVIDER: ${provider}`);
   console.log(`[SMTP-CONFIG] RESEND_API_KEY configured: ${hasResend}`);
+  console.log(`[SMTP-CONFIG] BREVO_API_KEY configured: ${hasBrevo}`);
   console.log(`[SMTP-CONFIG] ETHEREAL_USER configured: ${hasUser}`);
   console.log(`[SMTP-CONFIG] ETHEREAL_PASS configured: ${hasPass}`);
   console.log(`[SMTP-CONFIG] ETHEREAL_HOST: ${host}`);
@@ -40,7 +42,7 @@ export async function checkSmtpConnectivity(host: string) {
   }
 }
 
-export async function sendMailViaHttpApi({
+export async function sendMailViaResendApi({
   apiKey,
   from,
   to,
@@ -53,11 +55,10 @@ export async function sendMailViaHttpApi({
   subject: string;
   text: string;
 }) {
-  console.log('[EMAIL-DIAG] PROVIDER REQUEST START');
+  console.log('[EMAIL-DIAG] PROVIDER REQUEST START (Resend REST API over HTTPS Port 443)');
 
-  const formattedFrom = from.includes('<')
-    ? from
-    : `ReachInbox Scheduler <onboarding@resend.dev>`;
+  // Use Resend's free onboarding domain when custom domain is unverified
+  const formattedFrom = 'ReachInbox Scheduler <onboarding@resend.dev>';
 
   try {
     const response = await fetch('https://api.resend.com/emails', {
@@ -82,7 +83,7 @@ export async function sendMailViaHttpApi({
       throw new Error(`Resend HTTPS API Error (${response.status}): ${safeErrorMsg}`);
     }
 
-    const messageId = data.id || `msg-${Date.now()}`;
+    const messageId = data.id || `re_${Date.now()}`;
     console.log(`[EMAIL-DIAG] PROVIDER SUCCESS messageId=${messageId}`);
 
     return {
@@ -96,25 +97,60 @@ export async function sendMailViaHttpApi({
   }
 }
 
-export async function sendMailViaEtherealHttps({
-  emailId,
-  user,
+export async function sendMailViaBrevoApi({
+  apiKey,
+  from,
+  to,
+  subject,
+  text,
 }: {
-  emailId?: string;
-  user?: string;
+  apiKey: string;
+  from: string;
+  to: string;
+  subject: string;
+  text: string;
 }) {
-  console.log('[EMAIL-DIAG] PROVIDER REQUEST START (Ethereal HTTPS Fallback over Port 443)');
-  const randomHash = Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
-  const finalMessageId = `<eth-${Date.now()}-${randomHash.slice(0, 8)}@ethereal.email>`;
-  const previewUrl = `https://ethereal.email/message/${randomHash}`;
+  console.log('[EMAIL-DIAG] PROVIDER REQUEST START (Brevo REST API over HTTPS Port 443)');
 
-  console.log(`[EMAIL-DIAG] PROVIDER SUCCESS messageId=${finalMessageId}`);
-  console.log(`[SMTP] previewUrl=${previewUrl}`);
+  const senderName = from.includes('<') ? from.split('<')[0].trim() : 'ReachInbox Scheduler';
+  const senderEmail = from.includes('<') ? from.split('<')[1].replace('>', '').trim() : from;
 
-  return {
-    messageId: finalMessageId,
-    previewUrl,
-  };
+  try {
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'api-key': apiKey,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({
+        sender: { name: senderName, email: senderEmail },
+        to: [{ email: to }],
+        subject,
+        textContent: text,
+      }),
+    });
+
+    const data = (await response.json()) as { messageId?: string; message?: string; code?: string };
+
+    if (!response.ok) {
+      const safeErrorMsg = data.message || data.code || `HTTP ${response.status}`;
+      console.error(`[EMAIL-DIAG] PROVIDER ERROR status=${response.status} message=${safeErrorMsg}`);
+      throw new Error(`Brevo HTTPS API Error (${response.status}): ${safeErrorMsg}`);
+    }
+
+    const messageId = data.messageId || `bv_${Date.now()}`;
+    console.log(`[EMAIL-DIAG] PROVIDER SUCCESS messageId=${messageId}`);
+
+    return {
+      messageId,
+      previewUrl: undefined,
+    };
+  } catch (err: any) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.error(`[EMAIL-DIAG] PROVIDER ERROR message=${errorMsg}`);
+    throw err;
+  }
 }
 
 export async function getTransport() {
@@ -212,10 +248,14 @@ export async function sendMailWithEthereal({
 }) {
   const logId = emailId || 'N/A';
   const provider = (env.EMAIL_PROVIDER || 'ethereal').toLowerCase();
+  const isProd = env.NODE_ENV === 'production' || process.env.NODE_ENV === 'production';
 
-  // If EMAIL_PROVIDER is explicitly set to 'resend' AND RESEND_API_KEY is present, use Resend
-  if (provider === 'resend' && env.RESEND_API_KEY && env.RESEND_API_KEY.trim()) {
-    return sendMailViaHttpApi({
+  // 1. Resend REST API over HTTPS Port 443
+  if (provider === 'resend' || (isProd && env.RESEND_API_KEY && provider !== 'brevo')) {
+    if (!env.RESEND_API_KEY || !env.RESEND_API_KEY.trim()) {
+      throw new Error('EMAIL_PROVIDER=resend requires RESEND_API_KEY environment variable in Render.');
+    }
+    return sendMailViaResendApi({
       apiKey: env.RESEND_API_KEY.trim(),
       from,
       to,
@@ -224,11 +264,31 @@ export async function sendMailWithEthereal({
     });
   }
 
-  // Default provider: Ethereal SMTP with HTTPS Port 443 fallback for cloud firewall blocks
-  console.log('[EMAIL-DIAG] PROVIDER REQUEST START');
+  // 2. Brevo REST API over HTTPS Port 443
+  if (provider === 'brevo') {
+    if (!env.BREVO_API_KEY || !env.BREVO_API_KEY.trim()) {
+      throw new Error('EMAIL_PROVIDER=brevo requires BREVO_API_KEY environment variable in Render.');
+    }
+    return sendMailViaBrevoApi({
+      apiKey: env.BREVO_API_KEY.trim(),
+      from,
+      to,
+      subject,
+      text,
+    });
+  }
+
+  // 3. Ethereal SMTP (For Local Development & Non-Blocked Environments)
+  if (isProd && provider === 'ethereal' && !env.RESEND_API_KEY && !env.BREVO_API_KEY) {
+    console.error(
+      '[CONFIG ERROR] Render Free Web Services block outbound SMTP ports 25, 465, and 587. To send emails from Render production over HTTPS Port 443, configure EMAIL_PROVIDER=resend and RESEND_API_KEY in Render Environment Variables.',
+    );
+  }
+
+  console.log('[EMAIL-DIAG] PROVIDER REQUEST START (Ethereal SMTP)');
+  const transport = await getTransport();
 
   try {
-    const transport = await getTransport();
     const result = (await transport.sendMail({
       from,
       to,
@@ -255,23 +315,7 @@ export async function sendMailWithEthereal({
     };
   } catch (error: any) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    console.error(`[EMAIL-DIAG] PROVIDER SMTP ERROR error=${errorMsg}`);
-
-    // If outbound TCP SMTP port is firewall-blocked on cloud providers (e.g. Render Free),
-    // fallback to HTTPS Port 443 Ethereal preview dispatch to complete the email lifecycle safely.
-    if (
-      errorMsg.includes('verify timed out') ||
-      errorMsg.includes('ETIMEDOUT') ||
-      errorMsg.includes('ECONNREFUSED') ||
-      errorMsg.includes('credentials could not be established')
-    ) {
-      console.log('[SMTP-DIAG] Cloud firewall SMTP block detected. Switching to Ethereal HTTPS Port 443 preview dispatch...');
-      return sendMailViaEtherealHttps({
-        emailId,
-        user: env.ETHEREAL_USER,
-      });
-    }
-
+    console.error(`[EMAIL-DIAG] PROVIDER ERROR error=${errorMsg}`);
     cachedTransport = null;
     throw error;
   }
