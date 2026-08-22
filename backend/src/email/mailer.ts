@@ -39,7 +39,7 @@ export async function sendMailViaHttpApi({
   subject: string;
   text: string;
 }) {
-  console.log('[EMAIL-DIAG] PROVIDER REQUEST START (Resend HTTPS API over Port 443)');
+  console.log('[EMAIL-DIAG] PROVIDER REQUEST START');
 
   const formattedFrom = from.includes('<')
     ? from
@@ -188,7 +188,7 @@ export async function sendMailWithEthereal({
   }
 
   // Default provider: Ethereal SMTP
-  console.log(`[EMAIL-DIAG] PROVIDER REQUEST START (Ethereal SMTP for email=${logId})`);
+  console.log('[EMAIL-DIAG] PROVIDER REQUEST START');
   const transport = await getTransport();
 
   try {
